@@ -43,3 +43,16 @@ class VehicleRepository:
 
     async def list_fleet_groups(self, company_id: ObjectId) -> list[str]:
         return [g for g in await self._db.vehicles.distinct("fleet_group", {"company_id": company_id}) if g]
+
+    async def list_by_company(
+        self, company_id: ObjectId, fleet_group: str | None = None, limit: int = 100
+    ) -> list[dict]:
+        query: dict = {"company_id": company_id}
+        if fleet_group is not None:
+            query["fleet_group"] = fleet_group
+        cursor = self._db.vehicles.find(query).sort("plate_number", 1).limit(limit)
+        return await cursor.to_list(length=limit)
+
+    async def list_ids_by_fleet_group(self, company_id: ObjectId, fleet_group: str) -> list[ObjectId]:
+        vehicles = await self.list_by_company(company_id, fleet_group=fleet_group)
+        return [v["_id"] for v in vehicles]

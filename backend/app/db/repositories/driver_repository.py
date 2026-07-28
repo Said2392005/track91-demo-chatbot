@@ -24,3 +24,7 @@ class DriverRepository:
 
     async def get_by_id(self, company_id: ObjectId, driver_id: ObjectId) -> dict | None:
         return await self._db.drivers.find_one({"company_id": company_id, "_id": driver_id})
+
+    async def list_by_company(self, company_id: ObjectId, limit: int = 100) -> list[dict]:
+        cursor = self._db.drivers.find({"company_id": company_id}).sort("name", 1).limit(limit)
+        return await cursor.to_list(length=limit)
