@@ -8,6 +8,8 @@ performant access path, not just a correctness constraint.
 
 from pymongo import ASCENDING, GEOSPHERE
 
+from app.core.config import settings
+
 # Each entry: (keys: list[(field, direction)], options: dict)
 INDEX_DEFINITIONS: dict[str, list[tuple[list[tuple[str, int]], dict]]] = {
     "companies": [
@@ -97,6 +99,15 @@ INDEX_DEFINITIONS: dict[str, list[tuple[list[tuple[str, int]], dict]]] = {
         (
             [("company_id", ASCENDING), ("user_id", ASCENDING), ("last_active_at", ASCENDING)],
             {"name": "company_user_activity_idx"},
+        ),
+        (
+            # TTL index, not just a lookup index: MongoDB's TTL monitor re-evaluates against
+            # the CURRENT value of last_active_at on every sweep, so touching this field on
+            # every turn (session_repository.py) makes this a sliding idle-timeout — a session
+            # expires N seconds after its last activity, not N seconds after creation. Phase 8
+            # requirement: session state must expire, not persist indefinitely.
+            [("last_active_at", ASCENDING)],
+            {"name": "session_ttl_idx", "expireAfterSeconds": settings.session_ttl_seconds},
         ),
     ],
     "chat_messages": [

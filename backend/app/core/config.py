@@ -35,5 +35,16 @@ class Settings(BaseSettings):
     # once the KB is large/heterogeneous enough to plausibly benefit, and re-measure first.
     rag_use_reranker: bool = False
 
+    # Phase 8: conversation memory must expire, not persist indefinitely.
+    # - session_ttl_seconds: whole session (chat_sessions doc + LangGraph checkpoint) idle
+    #   expiry. 24h default — generous enough that a user returning later same-day resumes
+    #   their session, short enough not to accumulate abandoned sessions forever.
+    # - active_entity_ttl_seconds: separate, shorter — "its speed" resolving to a vehicle
+    #   discussed 3 hours ago in an otherwise-still-open session would be confusing even if the
+    #   session itself hasn't expired. 30 min default. Flagged assumption: both are guesses at
+    #   reasonable pilot defaults, not measured against real usage patterns.
+    session_ttl_seconds: int = 24 * 60 * 60
+    active_entity_ttl_seconds: int = 30 * 60
+
 
 settings = Settings()

@@ -224,6 +224,10 @@ COLLECTION_VALIDATORS: dict[str, dict] = {
                     "geofence_id": _OBJECT_ID,
                 },
             },
+            # Phase 8: when active_entities was last written. Coreference resolution treats
+            # active_entities as expired (ignores them) once this is older than
+            # settings.active_entity_ttl_seconds — see app/memory/active_entity_tracker.py.
+            "active_entities_updated_at": _DATE,
         },
     ),
     "chat_messages": _schema(

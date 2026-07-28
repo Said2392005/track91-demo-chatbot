@@ -13,7 +13,7 @@ TEST_MONGO_URI = os.environ.get("TEST_MONGO_URI", "mongodb://127.0.0.1:27017")
 async def db():
     """A real MongoDB database (not a fake) — schema validators and index creation are
     genuine MongoDB server behavior that in-memory fakes don't faithfully reproduce."""
-    client = AsyncIOMotorClient(TEST_MONGO_URI)
+    client = AsyncIOMotorClient(TEST_MONGO_URI, tz_aware=True)  # match app/db/client.py
     db_name = f"test_fleet_chatbot_{uuid.uuid4().hex[:8]}"
     database = client[db_name]
     await init_db(database)
