@@ -12,18 +12,28 @@ just prompt it to refuse.
 """
 
 from dataclasses import dataclass
+from typing import Protocol
 
-from app.rag.reranker import RankedChunk
+
+class ScoredChunk(Protocol):
+    """Structural type covering both RetrievedChunk (app/kb/retrieve.py) and RankedChunk
+    (app/rag/reranker.py) — this module only ever reads chunk_id/text/metadata, never the
+    ranking-specific fields (.distance vs .relevance_score), so it works unchanged whether
+    re-ranking (settings.rag_use_reranker) is enabled or not."""
+
+    chunk_id: str
+    text: str
+    metadata: dict
 
 
 @dataclass
 class AssembledContext:
     context_text: str
     citations: list[dict]
-    chunks_used: list[RankedChunk]
+    chunks_used: list[ScoredChunk]
 
 
-def _format(chunks: list[RankedChunk]) -> AssembledContext:
+def _format(chunks: list[ScoredChunk]) -> AssembledContext:
     blocks = []
     citations = []
     for i, chunk in enumerate(chunks, start=1):
@@ -34,14 +44,14 @@ def _format(chunks: list[RankedChunk]) -> AssembledContext:
     return AssembledContext(context_text="\n\n".join(blocks), citations=citations, chunks_used=chunks)
 
 
-def assemble_context(chunks: list[RankedChunk], top_n: int = 4) -> AssembledContext | None:
+def assemble_context(chunks: list[ScoredChunk], top_n: int = 4) -> AssembledContext | None:
     """General-purpose (non-gated) assembly for every KB category except `pricing`."""
     if not chunks:
         return None
     return _format(chunks[:top_n])
 
 
-def assemble_pricing_context(chunks: list[RankedChunk], top_n: int = 4) -> AssembledContext | None:
+def assemble_pricing_context(chunks: list[ScoredChunk], top_n: int = 4) -> AssembledContext | None:
     """PRICING-specific: filter to approved_pricing=True first, THEN select/rank-limit. An
     unapproved chunk ranking highest must never end up in the assembled context — filtering
     after truncation would let exactly that happen."""

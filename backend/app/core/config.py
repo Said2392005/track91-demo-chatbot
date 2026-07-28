@@ -29,5 +29,11 @@ class Settings(BaseSettings):
     # before this becomes load-bearing for a non-India deployment.
     default_timezone: str = "Asia/Kolkata"
 
+    # Phase 7: opt-in, not default. Measured worse than raw retrieval on this KB's size
+    # (precision@3: 0.875 reranked vs 0.9375 retrieval-only — see docs/phase-7-rag-pipeline/
+    # rag-pipeline.md) while adding a second model's load+inference cost per query. Re-enable
+    # once the KB is large/heterogeneous enough to plausibly benefit, and re-measure first.
+    rag_use_reranker: bool = False
+
 
 settings = Settings()

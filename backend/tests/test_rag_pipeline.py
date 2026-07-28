@@ -115,3 +115,44 @@ async def test_app_faq_query_end_to_end(ingested_collection):
     )
     assert result.llm_invoked is True
     assert result.citations[0]["title"] == "Track91 App FAQ"
+
+
+async def test_reranking_is_off_by_default(monkeypatch, ingested_collection):
+    """settings.rag_use_reranker defaults to False (see app/core/config.py — measured worse
+    than raw retrieval on this KB, docs/phase-7-rag-pipeline/rag-pipeline.md). Spies on
+    app.rag.pipeline.rerank to prove it's genuinely not called by default, not just that the
+    answer happens to look right either way."""
+    import app.rag.pipeline as pipeline_module
+
+    calls = []
+    monkeypatch.setattr(pipeline_module, "rerank", lambda *a, **k: calls.append(1) or [])
+
+    fake = FakeLLMProvider(canned_response="answer")
+    await answer_kb_query("How does geofencing work?", "feature_guide", fake, collection=ingested_collection)
+
+    assert calls == []
+
+
+async def test_reranking_can_be_explicitly_enabled(monkeypatch, ingested_collection):
+    import app.rag.pipeline as pipeline_module
+
+    real_rerank = pipeline_module.rerank
+    calls = []
+
+    def spy(*args, **kwargs):
+        calls.append(1)
+        return real_rerank(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline_module, "rerank", spy)
+
+    fake = FakeLLMProvider(canned_response="answer")
+    result = await answer_kb_query(
+        "How does geofencing work?",
+        "feature_guide",
+        fake,
+        collection=ingested_collection,
+        use_reranking=True,
+    )
+
+    assert calls == [1]
+    assert result.llm_invoked is True

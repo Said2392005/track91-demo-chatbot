@@ -70,7 +70,11 @@ produce zero approved candidates against a KB this small.
 
 ## Testing
 
-**35 new tests, 306/306 total passing** (271 carried forward):
+**37 new tests, 308/308 total passing** (271 carried forward) — includes 2 tests added when
+re-ranking became opt-in (`test_reranking_is_off_by_default`,
+`test_reranking_can_be_explicitly_enabled`, both in `test_rag_pipeline.py`, spying on
+`app.rag.pipeline.rerank` to prove it's genuinely not called by default rather than just
+happening to produce a correct-looking answer either way):
 
 | File | Coverage |
 |---|---|
@@ -93,3 +97,32 @@ pipeline is context/citation ordering quality within the already-gated candidate
 solving the `PRICING` approved/unapproved distinction, which the explicit metadata filter
 handles independent of rank. Test thresholds (`>= 0.85` retrieval, `>= 0.80` reranked) were set
 with real margin below these measured numbers, not picked to make the test pass.
+
+## Decision: re-ranking is opt-in, disabled by default
+
+`settings.rag_use_reranker` defaults to `False` (`app/core/config.py`). Given the measured
+numbers above — re-ranking *reduced* precision@3 on this KB (0.9375 → 0.875), while adding a
+second model's load-and-inference cost to every KB query — there was no case for keeping it on
+by default:
+
+- **No quality argument.** It measured worse, not better, at the current KB size (28 chunks,
+  6 documents). There's nothing to trade latency against.
+- **No correctness argument.** The `PRICING` gate's safety property (unapproved content never
+  reaches generation) is enforced by `context_assembler.py`'s explicit `approved_pricing`
+  filter, which runs identically regardless of whether the input candidates are ranked by raw
+  embedding distance or by cross-encoder score — proven directly by
+  `test_pricing_gate_filters_out_unapproved_even_when_it_ranks_highest` (retrieval-only ranking)
+  and the pipeline-level pricing tests (also retrieval-only ranking by default, since re-ranking
+  is off). Disabling the default does not weaken the gate.
+- **A real cost argument.** At pilot scale (<50 concurrent, per `non-goals.md`), loading and
+  running a second CPU model on every KB-routed turn is pure overhead with the measurements
+  above showing no offsetting benefit.
+
+`answer_kb_query()` still accepts `use_reranking: bool | None` as an explicit per-call override
+(`None` defers to `settings.rag_use_reranker`), and `context_assembler.py` accepts either
+`RetrievedChunk` (raw retrieval) or `RankedChunk` (post-rerank) unchanged, via a `ScoredChunk`
+structural protocol — so flipping the default later, once the KB is large/heterogeneous enough
+that topical overlap between documents becomes a real retrieval problem, is a one-line config
+change, not a code change. Re-measure precision@k against the golden set before flipping it,
+the same way this decision was made — don't re-enable on the assumption that a bigger KB
+automatically makes re-ranking pay for itself.
