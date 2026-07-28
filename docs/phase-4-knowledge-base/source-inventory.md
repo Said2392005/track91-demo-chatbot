@@ -46,13 +46,21 @@ topic — only `approved_pricing` distinguishes what's answerable:
    the Starter plan price?"* retrieves chunks from `track91-pricing-sheet-v3.md`
    (`approved_pricing: true`). The gate passes; the LLM generates a cited answer with the
    approved figure.
-2. **No-approved-doc case.** A query like *"What's your rate for 1,000+ vehicles?"* or *"Do you
-   offer a multi-year discount?"* only has a matching chunk in
-   `enterprise-pricing-draft-notes.md` (`approved_pricing: false`) — the approved sheet
-   explicitly punts fleets above 500 vehicles to "contact sales" rather than stating a number.
-   The gate must fail here even though a topically-relevant chunk *was* retrieved, and fall back
-   to the fixed contact-support response — this is the case that proves the gate checks
-   `approved_pricing`, not just "did retrieval return something."
+2. **No-approved-doc case — corrected after Phase 7 implementation testing.** The original
+   assumption here was that a query like *"What's your rate for 1,000+ vehicles?"* retrieves
+   *only* a chunk from `enterprise-pricing-draft-notes.md`, triggering the full fallback. Built
+   and tested against the real pipeline (Phase 7), this turned out to be wrong: the KB only has
+   9 pricing chunks total (5 approved + 4 unapproved), so top-k retrieval for this query always
+   surfaces at least one approved chunk too — here, the approved sheet's own "contact sales for
+   custom volume pricing above 500 vehicles" guidance, which is a genuinely correct, non-
+   hallucinated answer to the question. What actually matters — and is what's tested — is
+   narrower and still holds: **the unapproved draft chunk, even when it ranks #1 by raw
+   embedding distance (verified empirically), never reaches generation.** Every citation traces
+   back only to the approved sheet. The *pure* zero-approved-chunk fallback (no LLM call at
+   all) is real and tested (`test_pricing_no_approved_doc_at_all_never_calls_llm`,
+   `backend/tests/test_rag_pipeline.py`), just not reachable via this specific query against
+   this specific small KB — it's tested against an isolated collection containing only the
+   unapproved doc instead, which is the honest way to exercise that branch deterministically.
 
 Both cases should be added to Phase 7's precision@k golden set and Phase 12's eval harness as
 explicit `PRICING`-intent test rows, since this is the one place in the whole system where
