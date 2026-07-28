@@ -3,3 +3,6 @@ pymongo==4.17.0
 pydantic==2.13.4
 pydantic-settings==2.14.2
 python-dotenv==1.2.2
+sentence-transformers==5.6.1
+chromadb==1.5.9
+pyyaml==6.0.3

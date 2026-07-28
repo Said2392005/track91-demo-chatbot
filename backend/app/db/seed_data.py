@@ -355,7 +355,7 @@ async def seed(db: AsyncIOMotorDatabase | None = None) -> None:
             "approved_pricing": False,
         },
         {
-            "title": "How to Register a GPS Device",
+            "title": "Track91 App FAQ",
             "source_type": "app_faq",
             "version": "v1",
             "approved_pricing": False,
@@ -369,7 +369,7 @@ async def seed(db: AsyncIOMotorDatabase | None = None) -> None:
         {
             "title": "Data Retention Policy",
             "source_type": "policy",
-            "version": "v2",
+            "version": "v1",
             "approved_pricing": False,
         },
         {
