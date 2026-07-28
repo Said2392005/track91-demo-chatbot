@@ -23,8 +23,18 @@ INDEX_DEFINITIONS: dict[str, list[tuple[list[tuple[str, int]], dict]]] = {
             {"name": "company_plate_unique", "unique": True},
         ),
         (
+            # NOT `sparse: True` — on a COMPOUND index, sparse only skips docs missing *all*
+            # indexed fields, and company_id is always present, so sparse alone doesn't skip
+            # vehicles missing just device_id (a real state: a vehicle can exist before a GPS
+            # device is registered to it, per kb_sources/app_faq/track91-app-faq.md). Without
+            # partialFilterExpression, two such vehicles at the same company collide on
+            # device_id: null. Caught by tests/test_entity_extractor.py's seed fixture.
             [("company_id", ASCENDING), ("device_id", ASCENDING)],
-            {"name": "company_device_unique", "unique": True, "sparse": True},
+            {
+                "name": "company_device_unique",
+                "unique": True,
+                "partialFilterExpression": {"device_id": {"$exists": True}},
+            },
         ),
         (
             [("company_id", ASCENDING), ("assigned_driver_id", ASCENDING)],
@@ -34,8 +44,15 @@ INDEX_DEFINITIONS: dict[str, list[tuple[list[tuple[str, int]], dict]]] = {
     "drivers": [
         ([("company_id", ASCENDING)], {"name": "company_idx"}),
         (
+            # Same compound-sparse pitfall as vehicles.company_device_unique above — see the
+            # comment there. partialFilterExpression, not sparse, is what actually excludes
+            # drivers missing license_number from the uniqueness constraint.
             [("company_id", ASCENDING), ("license_number", ASCENDING)],
-            {"name": "company_license_unique", "unique": True, "sparse": True},
+            {
+                "name": "company_license_unique",
+                "unique": True,
+                "partialFilterExpression": {"license_number": {"$exists": True}},
+            },
         ),
     ],
     "trips": [
