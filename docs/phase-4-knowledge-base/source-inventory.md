@@ -58,6 +58,31 @@ Both cases should be added to Phase 7's precision@k golden set and Phase 12's ev
 explicit `PRICING`-intent test rows, since this is the one place in the whole system where
 "retrieval succeeded" and "answerable" are deliberately different questions.
 
+### Hard requirement for Phase 7, confirmed necessary by Phase 5 testing
+
+Phase 5's retrieval smoke test measured the actual embedding distance between these two cases'
+top candidates for the no-approved-doc query and found them **0.005 apart** (0.7398 vs 0.7449 —
+see `docs/phase-5-embedding-pipeline/embedding-pipeline.md`). Similarity rank is not a reliable
+signal for which pricing chunk is approved; the two are near-indistinguishable by embedding
+distance alone.
+
+**Therefore: for any `category: pricing` retrieval, Phase 7 must never select the pricing chunk
+to answer from by similarity rank.** The required logic is:
+
+1. Retrieve top-k candidates as normal.
+2. Filter the candidate set to `approved_pricing: true` chunks only.
+3. If the filtered set is non-empty, assemble context and generate from it (the approved-doc-exists
+   case).
+4. If the filtered set is empty — even if unapproved chunks were retrieved and ranked highly —
+   treat this as the no-approved-doc case and return the fixed contact-support response,
+   exactly as shown in [sequence diagram #4](../phase-2-architecture/sequence-diagrams.md).
+   The LLM must never be invoked with an unapproved chunk in its context for a `PRICING`-routed
+   query.
+
+This is a hard requirement, not a tuning suggestion — top-1-by-distance is actively wrong here,
+since the empirical margin between "answerable" and "must fall back" is smaller than normal
+embedding noise.
+
 ## Word/format notes
 
 - All source docs are hand-authored Markdown with YAML front-matter (see
