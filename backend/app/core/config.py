@@ -16,5 +16,18 @@ class Settings(BaseSettings):
     # multilingual/long-context strength, which this KB doesn't need. Swappable via env later.
     embedding_model_name: str = "all-MiniLM-L6-v2"
 
+    # LLM provider selection (ADR 002: strategy pattern, config-driven, no SDK in business
+    # logic). No credentials configured in this build — see docs/phase-6-semantic-analysis/.
+    llm_provider: str = "deepseek"
+    deepseek_api_key: str = ""
+
+    # Phase 6: which intent-classification strategy is active by default. "llm" requires a
+    # configured, working llm_provider; "rule_based" needs nothing but this codebase.
+    intent_classifier_strategy: str = "rule_based"
+
+    # Entity extraction assumption carried from docs/phase-1-planning/non-goals.md — confirm
+    # before this becomes load-bearing for a non-India deployment.
+    default_timezone: str = "Asia/Kolkata"
+
 
 settings = Settings()
