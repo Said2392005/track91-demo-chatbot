@@ -106,3 +106,15 @@ driver-name collision) to be remembered and picked between by a following "yes"/
 `AFFIRM_DENY` still only returns `app/agent/templates.py`'s generic "could you tell me again"
 response. Not called for in Phase 1's taxonomy or any phase's stated test requirements, and
 previously confirmed with the user as an acceptable gap — still true, just narrower than before.
+
+## Known limitation: compound requests are not supported
+
+Each message is treated as exactly one intent — a request like "list my drivers and show
+vehicle locations" is not decomposed and routed as two intents. A conjunction-splitting approach
+was evaluated and rejected: `app/nlu/message_splitter.py` + `app/eval/splitter_golden_set.py`
+measured a 100% false-split rate on realistic negatives (e.g. "What happens when a vehicle
+enters **and** exits a geofence?", "Show trips for Ramesh **and** Suresh" — both got wrongly
+split). The code and its eval are preserved, unused, in the repo in case a native multi-intent
+classifier/router (a materially larger change, touching Phases 6/9/10/11's single-intent
+contracts throughout) is revisited later with real evidence of need — see
+`tests/test_splitter_eval.py` for the measured numbers.
