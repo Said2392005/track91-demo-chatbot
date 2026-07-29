@@ -107,6 +107,40 @@ async def test_router_node_routes_on_raw_intent_not_downgraded_final_intent():
     assert result["clarifying_question"]
 
 
+async def test_router_node_corrects_final_intent_when_memory_fill_resolves_it():
+    """Regression: found via live testing. Phase 6's final_intent="CLARIFICATION_NEEDED" here
+    reflects that its OWN (pronoun-gated) active-entity fill never fired for a phrasing like
+    "where is my vehicle" — but route()'s memory-fill is not pronoun-gated, so it resolves
+    vehicle_ref from active_entities and route_outcome comes back TOOL_CALL. The intent that
+    actually ran this turn is raw_intent, not Phase 6's now-superseded guess — final_intent
+    must be corrected to match what ChatService will actually report/persist
+    (chat_messages.intent, ChatResponse.intent), not the pre-memory-fill guess."""
+    router_node = nodes.make_router_node()
+    active_vehicle_id = str(ObjectId())
+    result = await router_node(
+        {
+            "raw_intent": "GET_VEHICLE_LOCATION",
+            "final_intent": "CLARIFICATION_NEEDED",
+            "entities": {},
+            "active_entities": {"vehicle_id": active_vehicle_id},
+        }
+    )
+    assert result["route_outcome"] == "TOOL_CALL"
+    assert result["final_intent"] == "GET_VEHICLE_LOCATION"
+
+
+async def test_router_node_leaves_final_intent_alone_when_clarification_still_needed():
+    """The correction only applies when a tool actually runs — a genuine CLARIFICATION_NEEDED
+    outcome (memory-fill didn't resolve anything either) must not have its final_intent
+    rewritten to the still-unresolved raw_intent."""
+    router_node = nodes.make_router_node()
+    result = await router_node(
+        {"raw_intent": "GET_VEHICLE_LOCATION", "final_intent": "CLARIFICATION_NEEDED", "entities": {}, "active_entities": {}}
+    )
+    assert result["route_outcome"] == "CLARIFICATION_NEEDED"
+    assert result["final_intent"] == "CLARIFICATION_NEEDED"
+
+
 async def test_clarify_node_returns_clarifying_question_as_response(db):
     session_repo = SessionRepository(db)
     now = datetime.now(timezone.utc)
@@ -157,6 +191,7 @@ async def test_gps_tool_node_returns_checkpoint_safe_data():
     state = {
         "company_id": str(ObjectId()),
         "route_outcome": "TOOL_CALL",
+        "raw_intent": "GET_VEHICLE_SPEED",
         "final_intent": "GET_VEHICLE_SPEED",
         "tool_name": "get_vehicle_speed",
         "subsystem": "LIVE_API",
@@ -180,6 +215,7 @@ async def test_gps_tool_node_passes_company_id_for_fleet_status():
     state = {
         "company_id": str(company_id),
         "route_outcome": "TOOL_CALL",
+        "raw_intent": "GET_FLEET_LIVE_STATUS",
         "final_intent": "GET_FLEET_LIVE_STATUS",
         "tool_name": "get_fleet_live_status",
         "subsystem": "LIVE_API",
@@ -193,6 +229,33 @@ async def test_gps_tool_node_passes_company_id_for_fleet_status():
     assert "moving" in result["tool_result"]
 
 
+async def test_gps_tool_node_uses_raw_intent_not_final_intent_for_tool_lookup():
+    """Regression: found via live testing. route_outcome/tool_name/subsystem/route_params are
+    all computed from raw_intent (router_node calls route(state["raw_intent"], ...)) — but
+    final_intent is a separate Phase-6 decision that can legitimately disagree (Phase 6's own
+    active-entity fill is pronoun-gated; route()'s is not). This state reproduces exactly that
+    disagreement: route_outcome says TOOL_CALL for GET_VEHICLE_LOCATION, but final_intent still
+    says CLARIFICATION_NEEDED. Using final_intent for the TOOL_REGISTRY lookup previously
+    crashed with KeyError('CLARIFICATION_NEEDED') instead of running the tool route() actually
+    decided on."""
+    vehicle_id = ObjectId()
+    node = nodes.make_gps_tool_node(MockFleetGPSClient())
+    state = {
+        "company_id": str(ObjectId()),
+        "route_outcome": "TOOL_CALL",
+        "raw_intent": "GET_VEHICLE_LOCATION",
+        "final_intent": "CLARIFICATION_NEEDED",
+        "tool_name": "get_vehicle_location",
+        "subsystem": "LIVE_API",
+        "route_params": {"vehicle_id": str(vehicle_id)},
+        "clarifying_question": None,
+        "now": datetime.now(timezone.utc),
+    }
+    result = await node(state)
+    _assert_no_object_id(result)
+    assert "lat" in result["tool_result"]
+
+
 async def test_mongo_tool_node_sanitizes_raw_mongo_documents(db):
     company_id, vehicle_id = ObjectId(), ObjectId()
     now = datetime.now(timezone.utc)
@@ -203,6 +266,7 @@ async def test_mongo_tool_node_sanitizes_raw_mongo_documents(db):
     node = nodes.make_mongo_tool_node(db)
     state = {
         "route_outcome": "TOOL_CALL",
+        "raw_intent": "GET_TRIP_HISTORY",
         "final_intent": "GET_TRIP_HISTORY",
         "tool_name": "get_trip_history",
         "subsystem": "MONGO_REPO",
@@ -238,6 +302,7 @@ async def test_rag_tool_node_returns_plain_dict_not_dataclass():
     node = nodes.make_rag_tool_node(fake, collection)
     state = {
         "route_outcome": "TOOL_CALL",
+        "raw_intent": "EXPLAIN_FEATURE",
         "final_intent": "EXPLAIN_FEATURE",
         "tool_name": "explain_feature",
         "subsystem": "RAG",

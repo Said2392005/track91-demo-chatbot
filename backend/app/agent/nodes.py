@@ -29,9 +29,20 @@ from app.router.router import RouteDecision, execute_tool, route
 
 
 def _decision_from_state(state: AgentState) -> RouteDecision:
+    # raw_intent, not final_intent: route_outcome/tool_name/subsystem/route_params (router_node,
+    # below) were all computed by calling route(state["raw_intent"], ...) — final_intent is a
+    # separate, Phase-6-only decision that can legitimately disagree with route_outcome. Real
+    # bug, found live: route() fills a missing vehicle_ref from active_entities unconditionally
+    # (defense-in-depth), but Phase 6's own coreference fill only fires when the utterance
+    # contains a recognized pronoun (app/nlu/coreference.py — "my" isn't one). So "where is my
+    # vehicle" (no pronoun, no explicit plate), asked again in a session with an active vehicle,
+    # produced final_intent="CLARIFICATION_NEEDED" (Phase 6 didn't fill it) while
+    # route_outcome="TOOL_CALL" (Phase 9 did) — using final_intent here looked up
+    # TOOL_REGISTRY["CLARIFICATION_NEEDED"] and crashed with a KeyError instead of running the
+    # tool route() had actually decided on.
     return RouteDecision(
         outcome=state["route_outcome"],
-        intent=state["final_intent"],
+        intent=state["raw_intent"],
         tool_name=state.get("tool_name"),
         subsystem=state.get("subsystem"),
         params=entities_to_object_ids(state.get("route_params", {})),
@@ -120,8 +131,20 @@ def make_router_node():
         decision = route(
             state["raw_intent"], state.get("entities", {}), {"active_entities": state.get("active_entities", {})}
         )
+        # Correct final_intent when route()'s own memory-fill resolves what Phase 6's
+        # final_intent (still possibly "CLARIFICATION_NEEDED") didn't: if a tool is actually
+        # about to run for raw_intent (route_condition sends every TOOL_CALL outcome straight to
+        # a tool node, always), the intent that "actually happened" this turn IS raw_intent —
+        # not Phase 6's earlier, now-superseded guess. Real bug, found live: "where is my
+        # vehicle" (no pronoun, so Phase 6's own coreference fill never fired) reused an active
+        # vehicle via route()'s unconditional memory-fill and genuinely answered the location
+        # question, but ChatService/chat_messages.intent still reported "CLARIFICATION_NEEDED" —
+        # correct response, mislabeled record. See
+        # test_router_node_corrects_final_intent_when_memory_fill_resolves_it below.
+        final_intent = state["raw_intent"] if decision.outcome == "TOOL_CALL" else state["final_intent"]
         return {
             "route_outcome": decision.outcome,
+            "final_intent": final_intent,
             "tool_name": decision.tool_name,
             "subsystem": decision.subsystem,
             "route_params": decision.params,

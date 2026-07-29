@@ -130,6 +130,36 @@ def test_its_speed_coreference_through_real_http_and_real_graph(e2e_client):
     assert turn2.json()["intent"] == "GET_VEHICLE_SPEED", "must resolve via memory, not need clarification"
 
 
+def test_chat_service_persists_corrected_final_intent(e2e_client):
+    """Real bug, reproduced live: "where is my vehicle" (no pronoun, no plate) asked in a
+    session with an already-active vehicle resolves via route()'s unconditional memory-fill
+    and genuinely answers the location question — but Phase 6's own final_intent still said
+    "CLARIFICATION_NEEDED" (its coreference fill is pronoun-gated and never fired for this
+    phrasing). Before the fix, ChatResponse.intent and the persisted chat_messages.intent both
+    reported the stale "CLARIFICATION_NEEDED" despite a real answer being returned. Verifies
+    the fix through the real HTTP API + real Mongo persistence, not just graph state directly
+    (see test_agent_graph_integration.py::test_vague_followup_with_no_pronoun_uses_active_entity_not_crash
+    for the graph-level version of this same assertion)."""
+    client, db_name = e2e_client
+    _seed_demo_user(db_name, "finalintent@example.com", "e2e-password")
+    token = client.post("/auth/login", json={"email": "finalintent@example.com", "password": "e2e-password"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    turn1 = client.post("/chat", json={"message": "Where is MH12AB1234?"}, headers=headers)
+    session_id = turn1.json()["session_id"]
+    assert turn1.json()["intent"] == "GET_VEHICLE_LOCATION"
+
+    turn2 = client.post("/chat", json={"message": "where is my vehicle", "session_id": session_id}, headers=headers)
+    assert turn2.status_code == 200
+    body = turn2.json()
+    assert body["intent"] == "GET_VEHICLE_LOCATION", "returned ChatResponse.intent must reflect what actually ran, not Phase 6's pre-memory-fill guess"
+
+    history = client.get(f"/chat/{session_id}/history", headers=headers)
+    messages = history.json()["messages"]
+    assert messages[-1]["role"] == "assistant"
+    assert messages[-1]["intent"] == "GET_VEHICLE_LOCATION", "persisted chat_messages.intent must match too"
+
+
 def test_pricing_gate_through_real_http_stack(e2e_client):
     client, db_name = e2e_client
     _seed_demo_user(db_name, "pricing@example.com", "e2e-password")

@@ -259,6 +259,53 @@ async def test_bare_vehicle_number_completes_pending_clarification(db, kb_collec
     assert turn3["raw_intent"] == "GREETING"
 
 
+async def test_vague_followup_with_no_pronoun_uses_active_entity_not_crash(db, kb_collection, real_checkpointer):
+    """Real bug, reproduced live: turn 1 sets an active vehicle explicitly. Turn 2 asks "where
+    is my vehicle" — no pronoun ("it"/"its"/"that"/...) for Phase 6's own coreference check to
+    catch, and no explicit plate — so Phase 6 leaves final_intent=CLARIFICATION_NEEDED. But
+    route() fills the missing vehicle_ref from active_entities unconditionally (its own
+    defense-in-depth, not pronoun-gated), so route_outcome=TOOL_CALL. app/agent/nodes.py's
+    _decision_from_state previously used final_intent for the executed tool lookup and crashed
+    with KeyError('CLARIFICATION_NEEDED') instead of running the GET_VEHICLE_LOCATION tool
+    route() had actually decided on. Also covers the follow-up fix: final_intent itself must be
+    corrected to GET_VEHICLE_LOCATION (router_node) so what's returned/persisted
+    (ChatResponse.intent, chat_messages.intent) matches what actually ran, not Phase 6's
+    pre-memory-fill guess — see test_chat_service_persists_corrected_final_intent for the
+    persistence-layer version of this same assertion."""
+    company_id, vehicle_id = ObjectId(), ObjectId()
+    now = datetime.now(timezone.utc)
+    await db.vehicles.insert_one(
+        {"_id": vehicle_id, "company_id": company_id, "plate_number": "MH12AB1234", "status": "active", "created_at": now}
+    )
+    session = await SessionRepository(db).create(company_id, ObjectId(), now)
+    session_id = session["_id"]
+
+    graph = _graph(db, kb_collection, real_checkpointer)
+    config = {"configurable": {"thread_id": str(session_id)}}
+
+    turn1 = await graph.ainvoke(
+        {"utterance": "Where is MH12AB1234?", "company_id": str(company_id), "session_id": str(session_id), "now": now},
+        config=config,
+    )
+    assert turn1["route_outcome"] == "TOOL_CALL"
+
+    turn2 = await graph.ainvoke(
+        {
+            "utterance": "where is my vehicle",
+            "company_id": str(company_id),
+            "session_id": str(session_id),
+            "now": now + timedelta(seconds=30),
+        },
+        config=config,
+    )
+    assert turn2["route_outcome"] == "TOOL_CALL", "route() should fill vehicle_ref from active_entities and actually run the tool"
+    assert "tool_result" in turn2 and turn2["tool_result"] is not None
+    assert "response_text" in turn2 and turn2["response_text"]
+    assert turn2["final_intent"] == "GET_VEHICLE_LOCATION", (
+        "the tool that actually ran must be reflected in final_intent, not Phase 6's pre-memory-fill CLARIFICATION_NEEDED guess"
+    )
+
+
 async def test_affirm_deny_reply_to_a_real_clarifying_question(db, kb_collection, real_checkpointer):
     """The AFFIRM_DENY gap flagged earlier: awaiting_clarification was only ever set manually
     in tests/the eval golden set, never by a real conversation, so a real "Yes"/"No" reply to a
