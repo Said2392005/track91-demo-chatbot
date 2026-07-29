@@ -132,37 +132,41 @@ likely explanation is local resource contention, not an application bug — but 
 isolated, and is reported as an open question for testing in a dedicated environment, not
 claimed as diagnosed.
 
-## Re-verifying "its speed" — now covered at every layer, with a real model still pending
+## Real-model verification — completed with Groq (free tier), not DeepSeek
 
-The scenario is now verified through: Phase 10's graph integration test (real graph, real
-checkpointer, no HTTP), Phase 11's contract test (fake graph, real HTTP), and this phase's
-`test_its_speed_coreference_through_real_http_and_real_graph` (real graph, real HTTP, real
-checkpointer — the only fake is the LLM). All pass. **Re-running it against a real DeepSeek
-response specifically is still pending** — it needs `DEEPSEEK_API_KEY` configured, which hadn't
-happened as of this phase. Once set:
+A paid DeepSeek key wasn't available, so `GroqProvider` (`app/llm/providers/groq.py`) was added
+as a second, free-tier `LLMProvider` adapter — OpenAI-compatible, same interface, config-driven
+swap (`LLM_PROVIDER=groq`) per ADR 002. `DeepSeekProvider` and `GroqProvider` were refactored to
+share `OpenAICompatibleProvider` (`app/llm/providers/openai_compatible.py`) once a second real
+concrete adapter needed the identical request/response handling — extracted because the reuse
+was immediate and real, not speculative.
 
-```bash
-cd backend
-# restart the server, confirm the startup warning is gone, then:
-curl -X POST http://127.0.0.1:8000/chat -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" -d '{"message":"Where is MH12AB1234?"}'
-# then, with the returned session_id:
-curl -X POST http://127.0.0.1:8000/chat -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" -d '{"message":"What'"'"'s its speed?","session_id":"<id>"}'
-```
+With `GROQ_API_KEY` configured (`backend/.env`, gitignored, never committed) and
+`LLM_PROVIDER=groq`, the real server was started and driven with real HTTP requests:
 
-The second response's `intent` should be `GET_VEHICLE_SPEED` with real generated text (not the
-`LLM_UNAVAILABLE_RESPONSE`) — the exact check already run manually in Phase 11, just with real
-generation this time instead of the graceful-degradation path.
+- **The "its speed" scenario**: turn 1 ("Where is MH12AB1234?") returned a real
+  Groq-generated location answer; turn 2 ("What's its speed?"), same session, correctly
+  resolved "its" via memory and returned `intent: GET_VEHICLE_SPEED` with a real generated
+  speed answer — not the `LLM_UNAVAILABLE_RESPONSE` degraded path.
+- **`PRICING`**: "How much does the Pro plan cost per month?" returned a real answer correctly
+  citing both the monthly (₹1,049) and annual (₹899) figures from the approved pricing sheet,
+  with citations tracing only to `Track91 Pricing Sheet`.
+- **`EXPLAIN_FEATURE`**: "How does geofencing work?" returned an accurate, well-grounded
+  multi-sentence answer citing the geofencing guide's actual content.
+- **`python -m app.eval.runner --real-llm`**: identical results to the fake-LLM run (100%
+  intent, 100% entity, 100% retrieval, 81.8% citation groundedness) — confirms, with real
+  evidence rather than just the design claim, that these four metrics never depended on the
+  LLM's actual output.
 
 ## Switching the eval harness / load test to a real LLM
 
-`python -m app.eval.runner --real-llm` uses `get_llm_provider()` (the real DeepSeek adapter)
-instead of `FakeLLMProvider`, once `DEEPSEEK_API_KEY` is set. The citation-groundedness proxy
-stays meaningful either way (it never depended on the LLM's actual output); true answer-
-faithfulness scoring (comparing generated prose against source content, not just checking
-citations) would need a real model's output and isn't attempted with the fake — that's the one
-metric this harness can't fully deliver until a key exists.
+`python -m app.eval.runner --real-llm` uses `get_llm_provider()` — whichever provider
+`LLM_PROVIDER` selects (`deepseek` or `groq`), both behind the identical interface. The
+citation-groundedness proxy stays meaningful either way (it never depended on the LLM's actual
+output, now confirmed above); true answer-faithfulness scoring (comparing generated prose
+against source content, not just checking citations) would need systematic human or
+model-graded review of real output and isn't attempted here — that's the one metric this
+harness still can't fully automate, real LLM or not.
 
 ## Testing
 

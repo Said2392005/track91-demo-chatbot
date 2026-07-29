@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # logic). No credentials configured in this build — see docs/phase-6-semantic-analysis/.
     llm_provider: str = "deepseek"
     deepseek_api_key: str = ""
+    # Groq (app/llm/providers/groq.py): free-tier OpenAI-compatible alternative actually used
+    # for Phase 12's real-model verification, since a paid DeepSeek key wasn't available.
+    groq_api_key: str = ""
 
     # Phase 6: which intent-classification strategy is active by default. "llm" requires a
     # configured, working llm_provider; "rule_based" needs nothing but this codebase.
