@@ -19,6 +19,11 @@ PARAPHRASES: dict[str, list[str]] = {
         "Can you track my vehicle MH12AB1234 for me?",
         "Where's MH14CD5678 at the moment?",
         "Find my vehicle MH12AB1234",
+        # Regression: found via the systematic 41-probe realistic-paraphrase check, fixed with
+        # a GET_VEHICLE_LOCATION cooccurrence table + bare-plate regexes.
+        "Locate MH12AB1234",
+        "MH12AB1234's location",
+        "Can you find MH12AB1234?",
     ],
     "GET_VEHICLE_SPEED": [
         "How fast is MH12AB1234 going?",
@@ -30,6 +35,10 @@ PARAPHRASES: dict[str, list[str]] = {
         # "vehicle speed"/"speed of" trigger phrases were added.
         "What is my vehicle speed?",
         "What is the speed of my vehicle?",
+        # Regression: found via the systematic 41-probe realistic-paraphrase check, fixed with
+        # a GET_VEHICLE_SPEED cooccurrence table + a bare-plate regex.
+        "MH12AB1234 speed",
+        "How quickly is MH12AB1234 moving?",
     ],
     "GET_VEHICLE_FUEL_LEVEL": [
         "What's the fuel level on MH12AB1234?",
@@ -37,6 +46,15 @@ PARAPHRASES: dict[str, list[str]] = {
         "How much fuel is left in the tank?",
         "Check the gas level for MH14CD5678",
         "How much petrol level is left?",
+        # Regression: found via the systematic 41-probe realistic-paraphrase check, fixed with
+        # a GET_VEHICLE_FUEL_LEVEL cooccurrence table + a bare-plate regex.
+        "MH12AB1234 fuel",
+        "How much petrol does MH12AB1234 have?",
+        "Fuel percentage of MH12AB1234",
+        # Regression: found via live testing right after the fix above — the bare-plate regex
+        # only handled the possessive ("'s") for GET_VEHICLE_LOCATION at first; "MH12AB1234's
+        # fuel" fell through the same way "MH12AB1234's location" would have.
+        "MH12AB1234's fuel",
     ],
     "GET_VEHICLE_HEALTH": [
         "Any engine warnings on MH12AB1234?",
@@ -128,6 +146,12 @@ PARAPHRASES: dict[str, list[str]] = {
         "Show me all drivers",
         "What's the driver list?",
         "Show drivers for the Mumbai fleet",
+        # Regression: found via live testing, all fell through to OUT_OF_SCOPE before the fix.
+        "Names of drivers",
+        "How many drivers do I have?",
+        "List of drivers",
+        "My drivers",
+        "Who are my drivers?",
     ],
     "CREATE_GEOFENCE": [
         "Create a geofence around our Pune warehouse",

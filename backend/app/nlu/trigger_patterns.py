@@ -156,6 +156,14 @@ TRIGGER_PHRASES: dict[str, list[str]] = {
         "who drives",
         "show drivers",
         "show me my drivers",
+        # Added after live testing: "names of drivers" / "how many drivers" / "list of
+        # drivers" / "my drivers" / "who are my drivers" all fell through to OUT_OF_SCOPE —
+        # none matched any existing phrase above.
+        "names of drivers",
+        "how many drivers",
+        "list of drivers",
+        "my drivers",
+        "who are my drivers",
     ],
     # C. Action / write (backlog for v1, still classifiable)
     "CREATE_GEOFENCE": [
@@ -259,6 +267,19 @@ TRIGGER_PHRASES: dict[str, list[str]] = {
     "CHITCHAT": ["how are you", "what can you do", "who are you", "tell me a joke", "what's up"],
 }
 
+# Loose plate-shaped span — same separator tolerance as app/nlu/normalization.py /
+# app/nlu/entity_extractor.py's own candidate regex, duplicated here (not imported) because
+# this module has no dependency on entity_extractor and the two are allowed to drift slightly
+# apart without breaking anything — this one only needs to detect "something plate-shaped is
+# here", not validate it.
+_PLATE_SPAN = r"[A-Za-z]{2}[\s\-.]?\d{2}[\s\-.]?[A-Za-z]{1,2}[\s\-.]?\d{4}"
+
+# Optional possessive between a plate and the topic noun that follows it — "MH12AB1234 speed"
+# and "MH12AB1234's speed" are equally natural; found live (after initially only handling this
+# for GET_VEHICLE_LOCATION) that "MH12AB1234's fuel" fell through while "MH12AB1234 fuel"
+# didn't, from the exact same oversight. Applied uniformly below rather than per-intent now.
+_OPTIONAL_POSSESSIVE = r"['’]?s?\s+"
+
 TRIGGER_REGEXES: dict[str, list[re.Pattern]] = {
     # "alert" is mandatory here, not optional — "what does X mean" alone must NOT match (it
     # would otherwise swallow general-knowledge term questions like "what does AIS-140 mean?").
@@ -268,6 +289,25 @@ TRIGGER_REGEXES: dict[str, list[re.Pattern]] = {
     # name) never matched. Found via the Phase 12 eval golden set, not by inspection.
     "ASSIGN_DRIVER_TO_VEHICLE": [re.compile(r"\bassign (\w+\s?){1,3}to\b")],
     "ACKNOWLEDGE_ALERT": [re.compile(r"\backnowledge .*alert"), re.compile(r"\bmark (this |the )?alert\b")],
+    # A bare "<plate> speed"/"<plate>'s location"/"<plate> fuel" has no verb at all for
+    # TRIGGER_COOCCURRENCE's verb-list side to match — a genuinely different utterance shape
+    # (noun phrase, not a question) than "how fast is it going". Found via the systematic
+    # 41-probe realistic-paraphrase check (all three of these intents' cooccurrence tables
+    # below were added for the *verb-phrase* shape; this regex covers the *bare-plate* shape
+    # neither the old phrase lists nor the new cooccurrence tables reach).
+    "GET_VEHICLE_LOCATION": [
+        re.compile(_PLATE_SPAN + _OPTIONAL_POSSESSIVE + r"location\b"),
+        re.compile(r"\blocate\b"),
+        # "can you find MH12AB1234" — "find" alone is too generic a bare phrase to add
+        # domain-wide (real false-positive risk outside this closed intent set), but "find" +
+        # a plate-shaped token together is unambiguous.
+        re.compile(r"\b(find|track)\b.*" + _PLATE_SPAN),
+    ],
+    "GET_VEHICLE_SPEED": [re.compile(_PLATE_SPAN + _OPTIONAL_POSSESSIVE + r"speed\b")],
+    "GET_VEHICLE_FUEL_LEVEL": [
+        re.compile(_PLATE_SPAN + _OPTIONAL_POSSESSIVE + r"fuel\b"),
+        re.compile(r"\bfuel (percentage|level)\s+of\b"),
+    ],
 }
 
 # Order-independent co-occurrence check: score if the utterance contains AT LEAST ONE phrase
@@ -308,6 +348,28 @@ TRIGGER_COOCCURRENCE: dict[str, tuple[list[str], list[str]]] = {
             "idle",
             "device offline",
         ],
+    ),
+    # Added after the systematic 41-probe realistic-paraphrase check found the plain
+    # TRIGGER_PHRASES lists for these four intents only cover a handful of exact phrasings —
+    # e.g. "is MH12AB1234 healthy" and "MH12AB1234's fuel percentage" both fell through
+    # entirely. Scoped to the highest-traffic intents first (location/speed/fuel/driver
+    # roster); the remaining LIVE_API/MONGO_REPO intents have the same shape of gap, tracked
+    # in docs/phase-6-semantic-analysis/known-gaps.md rather than fixed here.
+    "GET_VEHICLE_LOCATION": (
+        ["where is", "where's", "locate", "find", "track", "current location", "location of", "where can i find"],
+        ["vehicle", "truck", "van", "car", "fleet", "it"],
+    ),
+    "GET_VEHICLE_SPEED": (
+        ["how fast", "how quickly", "speed", "going at what speed", "what speed"],
+        ["vehicle", "truck", "van", "car", "it", "moving", "going"],
+    ),
+    "GET_VEHICLE_FUEL_LEVEL": (
+        ["fuel", "petrol", "gas", "how much"],
+        ["level", "left", "remaining", "percentage", "have", "does it have", "vehicle", "truck", "van", "car"],
+    ),
+    "GET_DRIVER_ROSTER": (
+        ["list", "show", "who are", "how many", "names of", "give me"],
+        ["drivers", "driver list", "driver roster"],
     ),
 }
 
