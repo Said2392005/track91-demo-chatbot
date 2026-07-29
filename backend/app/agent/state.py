@@ -17,6 +17,8 @@ class AgentState(TypedDict, total=False):
 
     # memory (Phase 8) — fetched by entry_node
     active_entities: dict
+    # popped (read-once) by entry_node; consumed by semantic_analysis_node via app.nlu.pipeline
+    pending_clarification: dict | None
 
     # semantic analysis (Phase 6) — set by semantic_analysis_node
     raw_intent: str
@@ -31,6 +33,7 @@ class AgentState(TypedDict, total=False):
     subsystem: str | None
     route_params: dict
     clarifying_question: str | None
+    missing_entity: str | None  # only set when route_outcome == CLARIFICATION_NEEDED
 
     # tool execution — set by gps_tool/mongo_tool/rag_tool node
     tool_result: Any

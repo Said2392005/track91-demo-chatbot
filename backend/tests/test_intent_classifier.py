@@ -26,6 +26,10 @@ PARAPHRASES: dict[str, list[str]] = {
         "What's the current speed of the truck?",
         "What speed is MH14CD5678 doing right now?",
         "How fast is it going right now?",
+        # Regression: found via live testing, fell through to GENERAL_KNOWLEDGE before the
+        # "vehicle speed"/"speed of" trigger phrases were added.
+        "What is my vehicle speed?",
+        "What is the speed of my vehicle?",
     ],
     "GET_VEHICLE_FUEL_LEVEL": [
         "What's the fuel level on MH12AB1234?",

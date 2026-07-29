@@ -30,6 +30,13 @@ TRIGGER_PHRASES: dict[str, list[str]] = {
         "speed right now",
         "going at what speed",
         "what speed is",
+        # Added after live testing surfaced "what is my vehicle speed" / "what is the speed of
+        # my vehicle" falling through to GENERAL_KNOWLEDGE — neither matched any existing
+        # phrase. \b-bounded matching (app/nlu/intent_classifier.py's _phrase_regex) means bare
+        # "speed" is safe here: it won't match inside "speeding" (ACKNOWLEDGE_ALERT/
+        # EXPLAIN_ALERT_TYPE's domain).
+        "vehicle speed",
+        "speed of",
     ],
     "GET_VEHICLE_FUEL_LEVEL": [
         "fuel level",

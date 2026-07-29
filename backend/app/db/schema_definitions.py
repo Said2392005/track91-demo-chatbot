@@ -228,6 +228,18 @@ COLLECTION_VALIDATORS: dict[str, dict] = {
             # active_entities as expired (ignores them) once this is older than
             # settings.active_entity_ttl_seconds — see app/memory/active_entity_tracker.py.
             "active_entities_updated_at": _DATE,
+            # Set by clarify_node when route() asks a clarifying question; popped (read once,
+            # then cleared) by entry_node on the very next turn — single-turn scoped by
+            # construction, not TTL-based. Lets a bare follow-up like "MH12AB1234" (no verb)
+            # complete the intent that was waiting on it instead of falling through to
+            # OUT_OF_SCOPE. See app/nlu/pipeline.py's analyze().
+            "pending_clarification": {
+                "bsonType": "object",
+                "properties": {
+                    "intent": _STRING,
+                    "missing": _STRING,
+                },
+            },
         },
     ),
     "chat_messages": _schema(

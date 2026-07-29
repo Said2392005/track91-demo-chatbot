@@ -58,6 +58,7 @@ _PER_TURN_RESET = {
     "subsystem": None,
     "route_params": {},
     "clarifying_question": None,
+    "missing_entity": None,
     "tool_result": None,
     "response_text": None,
     "citations": [],
@@ -66,10 +67,17 @@ _PER_TURN_RESET = {
 
 def make_entry_node(session_repo):
     async def entry_node(state: AgentState) -> dict:
-        active_entities = await get_active_entities(
-            session_repo, to_object_id(state["company_id"]), to_object_id(state["session_id"]), now=state["now"]
-        )
-        return {**_PER_TURN_RESET, "active_entities": sanitize_for_state(active_entities)}
+        company_id = to_object_id(state["company_id"])
+        session_id = to_object_id(state["session_id"])
+        active_entities = await get_active_entities(session_repo, company_id, session_id, now=state["now"])
+        # Read-once: pop_pending_clarification clears it in the same op, so it can only ever
+        # affect this one turn — see SessionRepository.pop_pending_clarification.
+        pending_clarification = await session_repo.pop_pending_clarification(company_id, session_id)
+        return {
+            **_PER_TURN_RESET,
+            "active_entities": sanitize_for_state(active_entities),
+            "pending_clarification": pending_clarification,
+        }
 
     return entry_node
 
@@ -82,7 +90,7 @@ def make_semantic_analysis_node(classifier, db):
             classifier,
             to_object_id(state["company_id"]),
             db,
-            session_state={"active_entities": active_entities},
+            session_state={"active_entities": active_entities, "pending_clarification": state.get("pending_clarification")},
             now=state["now"],
         )
         return {
@@ -118,6 +126,7 @@ def make_router_node():
             "subsystem": decision.subsystem,
             "route_params": decision.params,
             "clarifying_question": decision.clarifying_question,
+            "missing_entity": decision.missing_entity,
         }
 
     return router_node
@@ -138,8 +147,20 @@ def route_condition(state: AgentState) -> str:
     return "synthesis"  # NO_TOOL, BACKLOG_UNSUPPORTED, UNKNOWN_INTENT — nothing to call
 
 
-def make_clarify_node():
+def make_clarify_node(session_repo):
     async def clarify_node(state: AgentState) -> dict:
+        # raw_intent is always a real actionable intent here, never a NONE-subsystem meta
+        # intent: route() only ever returns CLARIFICATION_NEEDED for an intent with its own
+        # `required`/`required_one_of`, and route_condition() only sends CLARIFICATION_NEEDED
+        # outcomes here. Recorded so the very next turn can complete this intent directly if it
+        # resolves just what's missing — see SessionRepository.set_pending_clarification.
+        await session_repo.set_pending_clarification(
+            to_object_id(state["company_id"]),
+            to_object_id(state["session_id"]),
+            intent=state["raw_intent"],
+            missing=state["missing_entity"],
+            now=state["now"],
+        )
         return {"response_text": state.get("clarifying_question") or "Could you clarify what you're asking about?"}
 
     return clarify_node
@@ -147,7 +168,15 @@ def make_clarify_node():
 
 def make_gps_tool_node(gps_client):
     async def gps_tool_node(state: AgentState) -> dict:
-        result = await execute_tool(_decision_from_state(state), gps_client=gps_client, now=state["now"])
+        # company_id is required by GET_FLEET_LIVE_STATUS (the one LIVE_API tool scoped to the
+        # whole fleet rather than a single vehicle_id in params) — this node never passed it,
+        # so that intent crashed with a TypeError the moment it actually ran. Every other
+        # LIVE_API handler's **_ harmlessly absorbs the now-always-passed kwarg it doesn't need.
+        # Found via live testing, not caught by any existing test (none exercised this intent
+        # past classification — see the regression test added alongside this fix).
+        result = await execute_tool(
+            _decision_from_state(state), company_id=to_object_id(state["company_id"]), gps_client=gps_client, now=state["now"]
+        )
         return {"tool_result": sanitize_for_state(result)}
 
     return gps_tool_node

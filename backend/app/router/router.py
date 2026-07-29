@@ -44,6 +44,11 @@ class RouteDecision:
     subsystem: str | None = None
     params: dict = field(default_factory=dict)
     clarifying_question: str | None = None
+    # The raw taxonomy requirement name (e.g. "vehicle_ref", "one_of:vehicle_ref|driver_ref")
+    # that's still missing — set only when outcome is CLARIFICATION_NEEDED. Lets clarify_node
+    # record exactly what the next turn needs to resolve to complete this intent (see
+    # SessionRepository.set_pending_clarification).
+    missing_entity: str | None = None
 
 
 def route(intent: str, entities: dict, memory_state: dict | None = None) -> RouteDecision:
@@ -68,7 +73,12 @@ def route(intent: str, entities: dict, memory_state: dict | None = None) -> Rout
         missing.append("one_of:" + "|".join(spec.required_one_of))
 
     if missing:
-        return RouteDecision(outcome="CLARIFICATION_NEEDED", intent=intent, clarifying_question=clarifying_question(missing[0]))
+        return RouteDecision(
+            outcome="CLARIFICATION_NEEDED",
+            intent=intent,
+            clarifying_question=clarifying_question(missing[0]),
+            missing_entity=missing[0],
+        )
 
     tool = TOOL_REGISTRY.get(intent)
     if tool is None:

@@ -23,7 +23,7 @@ def build_graph(*, classifier, db, llm, gps_client, kb_collection, session_repo,
     graph.add_node("entry", nodes.make_entry_node(session_repo))
     graph.add_node("semantic_analysis", nodes.make_semantic_analysis_node(classifier, db))
     graph.add_node("router", nodes.make_router_node())
-    graph.add_node("clarify", nodes.make_clarify_node())
+    graph.add_node("clarify", nodes.make_clarify_node(session_repo))
     graph.add_node("gps_tool", nodes.make_gps_tool_node(gps_client))
     graph.add_node("mongo_tool", nodes.make_mongo_tool_node(db))
     graph.add_node("rag_tool", nodes.make_rag_tool_node(llm, kb_collection))

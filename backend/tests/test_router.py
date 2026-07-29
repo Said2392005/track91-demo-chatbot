@@ -159,6 +159,20 @@ def test_missing_entity_produces_a_clarifying_question_string():
     assert "vehicle" in decision.clarifying_question.lower()
 
 
+def test_missing_entity_decision_records_which_requirement_is_missing():
+    """missing_entity is what clarify_node persists as pending_clarification so the next turn
+    can complete this intent directly instead of re-classifying from scratch."""
+    decision = route("GET_VEHICLE_SPEED", {}, None)
+    assert decision.missing_entity == "vehicle_ref"
+
+    decision = route("GET_TRIP_HISTORY", {}, None)
+    assert decision.missing_entity == "date_range"  # required= is checked before required_one_of=
+
+    decision = route("GET_VEHICLE_SPEED", {"vehicle_id": VEHICLE_ID}, None)
+    assert decision.outcome == "TOOL_CALL"
+    assert decision.missing_entity is None
+
+
 def test_pricing_tool_is_the_gated_rag_handler_not_a_bare_llm_call():
     """Confirms at the registry level (not just by convention) that PRICING's handler is
     app.tools.kb_tools.pricing — which hardcodes category="pricing" into answer_kb_query(), the

@@ -208,3 +208,78 @@ async def test_memory_persists_even_when_synthesis_llm_is_unavailable(db, kb_col
     )
     assert turn2["final_intent"] == "GET_VEHICLE_SPEED"
     assert turn2["route_outcome"] == "TOOL_CALL", "must resolve via memory, not need clarification"
+
+
+async def test_bare_vehicle_number_completes_pending_clarification(db, kb_collection, real_checkpointer):
+    """Real bug, reproduced live: "where is my vehicle?" -> "which vehicle?" -> a bare plate
+    number with no verb ("MH12AB1234") must complete the original GET_VEHICLE_LOCATION intent,
+    not fall through to OUT_OF_SCOPE/GENERAL_FALLBACK. Proven through the real compiled graph,
+    across two separate ainvoke() calls sharing only a thread_id, the way two separate HTTP
+    requests actually would."""
+    company_id, vehicle_id = ObjectId(), ObjectId()
+    now = datetime.now(timezone.utc)
+    await db.vehicles.insert_one(
+        {"_id": vehicle_id, "company_id": company_id, "plate_number": "MH12AB1234", "status": "active", "created_at": now}
+    )
+    session = await SessionRepository(db).create(company_id, ObjectId(), now)
+    session_id = session["_id"]
+
+    graph = _graph(db, kb_collection, real_checkpointer)
+    config = {"configurable": {"thread_id": str(session_id)}}
+
+    turn1 = await graph.ainvoke(
+        {"utterance": "where is my vehicle", "company_id": str(company_id), "session_id": str(session_id), "now": now},
+        config=config,
+    )
+    assert turn1["raw_intent"] == "GET_VEHICLE_LOCATION"
+    assert turn1["route_outcome"] == "CLARIFICATION_NEEDED"
+    assert "vehicle" in turn1["response_text"].lower()
+
+    turn2 = await graph.ainvoke(
+        {
+            "utterance": "MH12AB1234",
+            "company_id": str(company_id),
+            "session_id": str(session_id),
+            "now": now + timedelta(seconds=30),
+        },
+        config=config,
+    )
+    assert turn2["raw_intent"] == "GET_VEHICLE_LOCATION", "must resume the pending intent, not re-classify to OUT_OF_SCOPE"
+    assert turn2["final_intent"] == "GET_VEHICLE_LOCATION"
+    assert turn2["entities"]["vehicle_id"] == str(vehicle_id)
+    assert turn2["route_outcome"] == "TOOL_CALL"
+    assert turn2["subsystem"] == "LIVE_API"
+
+    # Single-turn scoped: a third, unrelated turn must not still be affected by turn1's
+    # clarification now that turn2 already consumed (popped) it.
+    turn3 = await graph.ainvoke(
+        {"utterance": "Hi there", "company_id": str(company_id), "session_id": str(session_id), "now": now + timedelta(minutes=1)},
+        config=config,
+    )
+    assert turn3["raw_intent"] == "GREETING"
+
+
+async def test_affirm_deny_reply_to_a_real_clarifying_question(db, kb_collection, real_checkpointer):
+    """The AFFIRM_DENY gap flagged earlier: awaiting_clarification was only ever set manually
+    in tests/the eval golden set, never by a real conversation, so a real "Yes"/"No" reply to a
+    real clarifying question always misclassified as OUT_OF_SCOPE instead of AFFIRM_DENY. Now
+    driven by the same pending_clarification state as the bare-entity-resume case above."""
+    company_id = ObjectId()
+    now = datetime.now(timezone.utc)
+    session = await SessionRepository(db).create(company_id, ObjectId(), now)
+    session_id = session["_id"]
+
+    graph = _graph(db, kb_collection, real_checkpointer)
+    config = {"configurable": {"thread_id": str(session_id)}}
+
+    turn1 = await graph.ainvoke(
+        {"utterance": "where is my vehicle", "company_id": str(company_id), "session_id": str(session_id), "now": now},
+        config=config,
+    )
+    assert turn1["route_outcome"] == "CLARIFICATION_NEEDED"
+
+    turn2 = await graph.ainvoke(
+        {"utterance": "Yes", "company_id": str(company_id), "session_id": str(session_id), "now": now + timedelta(seconds=10)},
+        config=config,
+    )
+    assert turn2["raw_intent"] == "AFFIRM_DENY", "a real 'Yes' reply to a real clarifying question must classify as AFFIRM_DENY"

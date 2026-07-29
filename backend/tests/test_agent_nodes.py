@@ -107,16 +107,55 @@ async def test_router_node_routes_on_raw_intent_not_downgraded_final_intent():
     assert result["clarifying_question"]
 
 
-async def test_clarify_node_returns_clarifying_question_as_response():
-    clarify_node = nodes.make_clarify_node()
-    result = await clarify_node({"clarifying_question": "Which vehicle are you asking about?"})
+async def test_clarify_node_returns_clarifying_question_as_response(db):
+    session_repo = SessionRepository(db)
+    now = datetime.now(timezone.utc)
+    company_id, user_id = ObjectId(), ObjectId()
+    session = await session_repo.create(company_id, user_id, now)
+
+    clarify_node = nodes.make_clarify_node(session_repo)
+    result = await clarify_node(
+        {
+            "company_id": str(company_id),
+            "session_id": str(session["_id"]),
+            "raw_intent": "GET_VEHICLE_LOCATION",
+            "missing_entity": "vehicle_ref",
+            "clarifying_question": "Which vehicle are you asking about?",
+            "now": now,
+        }
+    )
     assert result["response_text"] == "Which vehicle are you asking about?"
+
+
+async def test_clarify_node_records_pending_clarification_for_next_turn(db):
+    session_repo = SessionRepository(db)
+    now = datetime.now(timezone.utc)
+    company_id, user_id = ObjectId(), ObjectId()
+    session = await session_repo.create(company_id, user_id, now)
+
+    clarify_node = nodes.make_clarify_node(session_repo)
+    await clarify_node(
+        {
+            "company_id": str(company_id),
+            "session_id": str(session["_id"]),
+            "raw_intent": "GET_VEHICLE_LOCATION",
+            "missing_entity": "vehicle_ref",
+            "clarifying_question": "Which vehicle are you asking about?",
+            "now": now,
+        }
+    )
+
+    pending = await session_repo.pop_pending_clarification(company_id, session["_id"])
+    assert pending == {"intent": "GET_VEHICLE_LOCATION", "missing": "vehicle_ref"}
+    # Single-turn scoped: popping clears it, so a second pop finds nothing.
+    assert await session_repo.pop_pending_clarification(company_id, session["_id"]) is None
 
 
 async def test_gps_tool_node_returns_checkpoint_safe_data():
     vehicle_id = ObjectId()
     node = nodes.make_gps_tool_node(MockFleetGPSClient())
     state = {
+        "company_id": str(ObjectId()),
         "route_outcome": "TOOL_CALL",
         "final_intent": "GET_VEHICLE_SPEED",
         "tool_name": "get_vehicle_speed",
@@ -128,6 +167,30 @@ async def test_gps_tool_node_returns_checkpoint_safe_data():
     result = await node(state)
     _assert_no_object_id(result)
     assert "speed_kmph" in result["tool_result"]
+
+
+async def test_gps_tool_node_passes_company_id_for_fleet_status():
+    # Regression: found via live testing. GET_FLEET_LIVE_STATUS is the one LIVE_API handler
+    # that requires company_id (app/tools/live_data_tools.py) since it's scoped to the whole
+    # fleet, not a single vehicle_id in params — the node never passed it, so this crashed with
+    # a TypeError the moment the intent actually ran. No prior test exercised this intent past
+    # classification (test_intent_classifier.py only), so nothing caught it before live use.
+    company_id = ObjectId()
+    node = nodes.make_gps_tool_node(MockFleetGPSClient())
+    state = {
+        "company_id": str(company_id),
+        "route_outcome": "TOOL_CALL",
+        "final_intent": "GET_FLEET_LIVE_STATUS",
+        "tool_name": "get_fleet_live_status",
+        "subsystem": "LIVE_API",
+        "route_params": {},
+        "clarifying_question": None,
+        "now": datetime.now(timezone.utc),
+    }
+    result = await node(state)
+    _assert_no_object_id(result)
+    assert "total_vehicles" in result["tool_result"]
+    assert "moving" in result["tool_result"]
 
 
 async def test_mongo_tool_node_sanitizes_raw_mongo_documents(db):

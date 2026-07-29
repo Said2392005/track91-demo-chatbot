@@ -77,11 +77,32 @@ checkpointer — which is exactly why `tests/test_agent_graph_integration.py` us
    non-coreference case, and the `PRICING` gate proven reachable through the entire graph:
    citations trace only to the approved pricing sheet.
 
-## Known follow-up (agreed out of scope for the current roadmap)
+## Pending-clarification resume (added post-Phase-12, real bug found in live testing)
 
-`AFFIRM_DENY` has a direct-response template (`app/agent/templates.py`) but no actual
-multi-turn disambiguation flow — there's no mechanism yet for a prior `CLARIFICATION_NEEDED`
-turn's ambiguous candidates (e.g. a driver-name collision) to be remembered and resolved by a
-following "yes"/"no". Not called for in Phase 1's taxonomy or any phase's stated test
-requirements, and confirmed with the user as an acceptable gap rather than something to build
-now — noted here so it isn't forgotten, not blocking.
+`entry_node`/`clarify_node`/`app/nlu/pipeline.py`'s `analyze()` now track "we asked a clarifying
+question for intent X, still missing Y" across turns (`SessionRepository.set_pending_clarification`
+/ `pop_pending_clarification`, single-turn scoped — popped, not just read, on the very next
+turn). Two real gaps this closes, found by actually using the bot in a browser, not by
+inspection:
+
+1. **Bare-entity replies were falling through to `OUT_OF_SCOPE`.** "where is my vehicle?" ->
+   "which vehicle?" -> a bare "MH12AB1234" (no verb) has nothing for the classifier's trigger
+   phrases to match, so it scored 0 everywhere and fell through to the `OUT_OF_SCOPE` fallback
+   instead of completing `GET_VEHICLE_LOCATION`. Fixed: when the freshly-classified intent is a
+   no-clear-trigger fallback (`OUT_OF_SCOPE`/`GENERAL_KNOWLEDGE`) and a pending clarification
+   exists, entity extraction is retried against the *pending* intent before accepting the
+   fallback — a message that clearly matches its own trigger phrase is never overridden this
+   way. See `tests/test_agent_graph_integration.py::test_bare_vehicle_number_completes_pending_clarification`.
+2. **`awaiting_clarification` was never actually set by a real conversation** — it only ever
+   existed as a manually-passed flag in tests and the eval golden set, so a real "Yes"/"No"
+   reply to a real clarifying question always misclassified as `OUT_OF_SCOPE` rather than
+   `AFFIRM_DENY`. Now driven by the same pending-clarification state. See
+   `test_affirm_deny_reply_to_a_real_clarifying_question` in the same file.
+
+**Still an open, out-of-scope gap, not addressed by the above**: `AFFIRM_DENY` correctly
+*classifies* now, but still has no multi-turn disambiguation-*resolution* flow behind it — there
+remains no mechanism for a prior `CLARIFICATION_NEEDED` turn's ambiguous candidates (e.g. a
+driver-name collision) to be remembered and picked between by a following "yes"/"no";
+`AFFIRM_DENY` still only returns `app/agent/templates.py`'s generic "could you tell me again"
+response. Not called for in Phase 1's taxonomy or any phase's stated test requirements, and
+previously confirmed with the user as an acceptable gap — still true, just narrower than before.

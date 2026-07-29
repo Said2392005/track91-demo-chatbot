@@ -67,3 +67,26 @@ class SessionRepository:
                 }
             },
         )
+
+    async def set_pending_clarification(
+        self, company_id: ObjectId, session_id: ObjectId, intent: str, missing: str, now: datetime
+    ) -> None:
+        """Records "we asked a clarifying question for `intent`, still missing `missing`" so
+        the very next turn (entry_node's pop_pending_clarification) can complete `intent`
+        directly if that turn's message resolves just the missing piece, instead of
+        re-classifying from scratch and falling through to OUT_OF_SCOPE."""
+        await self._db.chat_sessions.update_one(
+            {"company_id": company_id, "_id": session_id},
+            {"$set": {"pending_clarification": {"intent": intent, "missing": missing}, "last_active_at": now}},
+        )
+
+    async def pop_pending_clarification(self, company_id: ObjectId, session_id: ObjectId) -> dict | None:
+        """Read-and-clear in one atomic op — pending_clarification is single-turn scoped by
+        construction: whether or not this turn's message actually resolves it, it must not
+        still be sitting there confusing some unrelated later message."""
+        doc = await self._db.chat_sessions.find_one_and_update(
+            {"company_id": company_id, "_id": session_id}, {"$unset": {"pending_clarification": ""}}
+        )
+        if doc is None:
+            return None
+        return doc.get("pending_clarification")

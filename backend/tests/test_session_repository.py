@@ -77,3 +77,37 @@ async def test_get_active_entities_for_unknown_session_returns_empty(db):
     active_entities, updated_at = await repo.get_active_entities(ObjectId(), ObjectId())
     assert active_entities == {}
     assert updated_at is None
+
+
+async def test_set_then_pop_pending_clarification(db):
+    repo = SessionRepository(db)
+    company_id, user_id = ObjectId(), ObjectId()
+    now = datetime.now(timezone.utc)
+    created = await repo.create(company_id, user_id, now)
+
+    await repo.set_pending_clarification(company_id, created["_id"], "GET_VEHICLE_LOCATION", "vehicle_ref", now)
+
+    pending = await repo.pop_pending_clarification(company_id, created["_id"])
+    assert pending == {"intent": "GET_VEHICLE_LOCATION", "missing": "vehicle_ref"}
+
+
+async def test_pop_pending_clarification_clears_it(db):
+    """Single-turn scoped by construction: popping once must remove it, not just read it."""
+    repo = SessionRepository(db)
+    company_id, user_id = ObjectId(), ObjectId()
+    now = datetime.now(timezone.utc)
+    created = await repo.create(company_id, user_id, now)
+
+    await repo.set_pending_clarification(company_id, created["_id"], "GET_VEHICLE_LOCATION", "vehicle_ref", now)
+    await repo.pop_pending_clarification(company_id, created["_id"])
+
+    assert await repo.pop_pending_clarification(company_id, created["_id"]) is None
+
+
+async def test_pop_pending_clarification_for_session_with_none_set_returns_none(db):
+    repo = SessionRepository(db)
+    company_id, user_id = ObjectId(), ObjectId()
+    now = datetime.now(timezone.utc)
+    created = await repo.create(company_id, user_id, now)
+
+    assert await repo.pop_pending_clarification(company_id, created["_id"]) is None

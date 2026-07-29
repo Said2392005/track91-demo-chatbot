@@ -64,3 +64,64 @@ async def test_meta_intent_skips_entity_extraction(db, seeded):
     assert result.raw_intent == "GREETING"
     assert result.final_intent == "GREETING"
     assert result.entities == {}
+
+
+async def test_bare_entity_resumes_pending_clarification(db, seeded):
+    """The scripted bug: "where is my vehicle?" -> "which vehicle?" -> a bare plate number with
+    no verb must complete GET_VEHICLE_LOCATION, not fall through to OUT_OF_SCOPE."""
+    pending = {"intent": "GET_VEHICLE_LOCATION", "missing": "vehicle_ref"}
+    result = await analyze(
+        "MH12AB1234",
+        RuleBasedIntentClassifier(),
+        seeded["company_id"],
+        db,
+        session_state={"pending_clarification": pending},
+    )
+    assert result.raw_intent == "GET_VEHICLE_LOCATION"
+    assert result.final_intent == "GET_VEHICLE_LOCATION"
+    assert result.entities["vehicle_id"] == seeded["vehicle_id"]
+
+
+async def test_unrelated_reply_does_not_resume_pending_clarification(db, seeded):
+    """A bare reply that doesn't resolve the missing entity must not be forced into the
+    pending intent — it should fall through to the classifier's own fresh verdict."""
+    pending = {"intent": "GET_VEHICLE_LOCATION", "missing": "vehicle_ref"}
+    result = await analyze(
+        "asdf not a plate",
+        RuleBasedIntentClassifier(),
+        seeded["company_id"],
+        db,
+        session_state={"pending_clarification": pending},
+    )
+    assert result.raw_intent == "OUT_OF_SCOPE"
+
+
+async def test_new_full_request_is_not_hijacked_by_pending_clarification(db, seeded):
+    """A message that clearly expresses its own intent (matches its own trigger phrase) must
+    win outright — pending-clarification resume only ever kicks in for the fallback intents
+    (OUT_OF_SCOPE/GENERAL_KNOWLEDGE), never overriding a real classification."""
+    pending = {"intent": "GET_VEHICLE_LOCATION", "missing": "vehicle_ref"}
+    result = await analyze(
+        "Hi there",
+        RuleBasedIntentClassifier(),
+        seeded["company_id"],
+        db,
+        session_state={"pending_clarification": pending},
+    )
+    assert result.raw_intent == "GREETING"
+
+
+async def test_affirm_deny_reply_to_pending_clarification_is_not_hijacked(db, seeded):
+    """"Yes"/"No" must classify as AFFIRM_DENY (via awaiting_clarification, now driven by real
+    pending_clarification state) rather than being treated as an attempt to resolve the
+    missing entity."""
+    pending = {"intent": "GET_VEHICLE_LOCATION", "missing": "vehicle_ref"}
+    result = await analyze(
+        "Yes",
+        RuleBasedIntentClassifier(),
+        seeded["company_id"],
+        db,
+        session_state={"pending_clarification": pending},
+    )
+    assert result.raw_intent == "AFFIRM_DENY"
+    assert result.final_intent == "AFFIRM_DENY"
