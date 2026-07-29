@@ -60,8 +60,34 @@ def test_pricing_gate_never_includes_unapproved_chunks_in_mixed_results():
     assert context.chunks_used[0].chunk_id == "approved-1"
 
 
-def test_non_pricing_assembly_does_not_apply_the_approval_filter():
-    chunks = [_ranked("c1", "Feature guide text", 9.0, approved_pricing=False, title="Feature Guide")]
+def test_non_pricing_assembly_does_not_filter_non_pricing_chunks_by_approval():
+    """`approved_pricing` defaults to False for every non-pricing chunk by convention
+    (metadata-schema.md) — assemble_context() must not treat that as "unapproved, exclude it"
+    the way assemble_pricing_context() does, or it would wrongly drop nearly every
+    feature_guide/app_faq/troubleshooting/policy chunk that exists."""
+    chunks = [_ranked("c1", "Feature guide text", 9.0, approved_pricing=False, category="feature_guide", title="Feature Guide")]
     context = assemble_context(chunks)
     assert context is not None
     assert context.chunks_used[0].chunk_id == "c1"
+
+
+def test_non_pricing_assembly_excludes_unapproved_pricing_content_specifically():
+    """Regression test for a real finding from the Phase 12 eval golden set: a POLICY_QUESTION
+    query pulled in a citation from the internal "Draft Enterprise Pricing Notes" doc (category
+    "pricing", unapproved) — content explicitly marked as never to be shown to a customer,
+    leaking in via an unrelated question because only PRICING-routed queries were gated.
+    assemble_context() must exclude category=="pricing" chunks that aren't approved, while still
+    including every other category's chunks regardless of their (irrelevant) approved_pricing
+    value."""
+    chunks = [
+        _ranked("policy-1", "Data retention policy text", 9.0, approved_pricing=False, category="policy", title="Data Retention Policy"),
+        _ranked("draft-1", "Unapproved draft pricing notes", 8.5, approved_pricing=False, category="pricing", title="Draft Notes"),
+    ]
+    context = assemble_context(chunks)
+    assert context is not None
+    assert [c.chunk_id for c in context.chunks_used] == ["policy-1"]
+
+
+def test_non_pricing_assembly_returns_none_if_only_unapproved_pricing_chunks_survive():
+    chunks = [_ranked("draft-1", "Unapproved draft pricing notes", 9.0, approved_pricing=False, category="pricing", title="Draft Notes")]
+    assert assemble_context(chunks) is None

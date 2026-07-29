@@ -9,6 +9,11 @@ selection — never picks the answering chunk by similarity/relevance rank alone
 survives that filter, assemble_pricing_context() returns None, which the caller
 (app/rag/pipeline.py) must treat as "no approved doc" and skip calling the LLM entirely — not
 just prompt it to refuse.
+
+`assemble_context()` (every other category) also excludes unapproved `pricing`-category chunks
+specifically — added in Phase 12 after the eval golden set caught draft pricing content
+surfacing as a citation on an unrelated POLICY_QUESTION answer. See that function's docstring
+for why this is a different, narrower filter than the PRICING gate's.
 """
 
 from dataclasses import dataclass
@@ -45,10 +50,24 @@ def _format(chunks: list[ScoredChunk]) -> AssembledContext:
 
 
 def assemble_context(chunks: list[ScoredChunk], top_n: int = 4) -> AssembledContext | None:
-    """General-purpose (non-gated) assembly for every KB category except `pricing`."""
+    """General-purpose assembly for every KB-routed intent except `PRICING` itself (which uses
+    assemble_pricing_context() below). Still excludes unapproved pricing content specifically —
+    found via the Phase 12 eval golden set: a POLICY_QUESTION about data retention pulled in a
+    citation from the internal, explicitly-never-to-be-quoted "Draft Enterprise Pricing Notes"
+    doc, since the PRICING gate only ever protected PRICING-routed queries, not incidental
+    retrieval hits on draft pricing content from an unrelated question. This is NOT the same
+    filter as assemble_pricing_context()'s: `approved_pricing` defaults to False for every
+    non-pricing chunk by convention (metadata-schema.md), so filtering on that field alone here
+    would wrongly exclude nearly everything — the filter below only ever removes chunks that are
+    BOTH `category: pricing` AND unapproved, leaving every other category's chunks untouched."""
     if not chunks:
         return None
-    return _format(chunks[:top_n])
+    safe_chunks = [
+        c for c in chunks if not (c.metadata.get("category") == "pricing" and c.metadata.get("approved_pricing") is not True)
+    ]
+    if not safe_chunks:
+        return None
+    return _format(safe_chunks[:top_n])
 
 
 def assemble_pricing_context(chunks: list[ScoredChunk], top_n: int = 4) -> AssembledContext | None:

@@ -221,6 +221,9 @@ TRIGGER_PHRASES: dict[str, list[str]] = {
         "is not updating",
         "isn't updating",
         "device stopped sending",
+        # base-tense variant ("why would a device STOP sending...") — the past-tense phrase
+        # above doesn't match this; found via the Phase 12 eval golden set.
+        "stop sending data",
     ],
     "POLICY_QUESTION": [
         "how long is",
@@ -238,6 +241,10 @@ TRIGGER_PHRASES: dict[str, list[str]] = {
         "plan cost",
         "discount for",
         "how much is the",
+        # "what's included in the Enterprise plan?" has none of "cost"/"price"/"pricing" at
+        # all — a realistic way to ask about a paid plan's contents. Found via the Phase 12
+        # eval golden set.
+        "included in the",
     ],
     # E. Conversational / meta
     "GREETING": ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"],
@@ -250,7 +257,9 @@ TRIGGER_REGEXES: dict[str, list[re.Pattern]] = {
     # would otherwise swallow general-knowledge term questions like "what does AIS-140 mean?").
     "EXPLAIN_ALERT_TYPE": [re.compile(r"what does .+ alert mean")],
     "PRICING": [re.compile(r"\bcost\b"), re.compile(r"\bprice\b"), re.compile(r"\bpricing\b")],
-    "ASSIGN_DRIVER_TO_VEHICLE": [re.compile(r"\bassign \w+ to\b")],
+    # \w+ alone only matches a single word — "Assign Ramesh Kumar to MH12AB1234" (a two-word
+    # name) never matched. Found via the Phase 12 eval golden set, not by inspection.
+    "ASSIGN_DRIVER_TO_VEHICLE": [re.compile(r"\bassign (\w+\s?){1,3}to\b")],
     "ACKNOWLEDGE_ALERT": [re.compile(r"\backnowledge .*alert"), re.compile(r"\bmark (this |the )?alert\b")],
 }
 
@@ -263,7 +272,10 @@ TRIGGER_REGEXES: dict[str, list[re.Pattern]] = {
 # means?") — both failure modes were caught empirically, not assumed.
 TRIGGER_COOCCURRENCE: dict[str, tuple[list[str], list[str]]] = {
     "EXPLAIN_FEATURE": (
-        ["how does", "how do", "what is", "what's", "explain", "tell me", "understand how", "used for"],
+        # "what happens" added via the Phase 12 eval golden set: "What happens when a vehicle
+        # enters or exits a geofence?" is a realistic feature-behavior question that none of
+        # the other verb phrases catch.
+        ["how does", "how do", "what is", "what's", "what happens", "explain", "tell me", "understand how", "used for"],
         [
             "geofencing",
             "geofence",
