@@ -9,7 +9,23 @@ supplies its own `api_base` and `default_model` (deepseek.py, groq.py).
 
 import httpx
 
-from app.llm.base import LLMProvider, LLMResponse, Message
+from app.llm.base import LLMProvider, LLMResponse, Message, TokenUsage
+
+
+def _parse_usage(data: dict) -> TokenUsage | None:
+    # OpenAI-compatible shape: {"usage": {"prompt_tokens": N, "completion_tokens": N, ...}} —
+    # confirmed against a real live Groq response, not assumed from the spec alone. Missing
+    # entirely, or missing one of the two counts, is treated the same way: no usage data, not
+    # a crash and not a guessed 0 (a provider that omits the field is different from one that
+    # genuinely used 0 tokens).
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    prompt_tokens = usage.get("prompt_tokens")
+    completion_tokens = usage.get("completion_tokens")
+    if prompt_tokens is None and completion_tokens is None:
+        return None
+    return TokenUsage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -40,4 +56,5 @@ class OpenAICompatibleProvider(LLMProvider):
             content=data["choices"][0]["message"]["content"],
             model=data.get("model", self._model),
             raw=data,
+            usage=_parse_usage(data),
         )

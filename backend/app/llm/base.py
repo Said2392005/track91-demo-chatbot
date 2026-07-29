@@ -18,10 +18,20 @@ class Message:
 
 
 @dataclass
+class TokenUsage:
+    prompt_tokens: int | None
+    completion_tokens: int | None
+
+
+@dataclass
 class LLMResponse:
     content: str
     model: str
     raw: dict | None = None
+    # None when the provider doesn't report usage at all (e.g. a local Ollama deployment), not
+    # when it reports zero — a real concrete adapter parses this from its own raw response
+    # shape (app/llm/providers/openai_compatible.py); this base class never guesses.
+    usage: TokenUsage | None = None
 
 
 class LLMProvider(ABC):

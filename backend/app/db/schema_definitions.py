@@ -271,4 +271,23 @@ COLLECTION_VALIDATORS: dict[str, dict] = {
             "ingested_at": _DATE,
         },
     ),
+    "llm_usage": _schema(
+        "LLMUsage",
+        required=["company_id", "user_id", "session_id", "provider", "model", "call_type", "created_at"],
+        properties={
+            "company_id": _OBJECT_ID,
+            "user_id": _OBJECT_ID,
+            "session_id": _OBJECT_ID,
+            "provider": _STRING,  # e.g. "groq", "deepseek" — app.llm.factory's LLM_PROVIDER value
+            "model": _STRING,
+            # e.g. "intent_classification", "response_synthesis", "rag_generation",
+            # "general_knowledge" — which of the (up to) 4 real LLM call sites this was.
+            "call_type": _STRING,
+            # Absent/null, not 0, when the provider doesn't report usage at all (e.g. local
+            # Ollama) — see app/llm/base.py's TokenUsage docstring. Never inferred/estimated.
+            "prompt_tokens": {"bsonType": ["int", "null"]},
+            "completion_tokens": {"bsonType": ["int", "null"]},
+            "created_at": _DATE,
+        },
+    ),
 }

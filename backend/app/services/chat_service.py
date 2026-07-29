@@ -20,6 +20,7 @@ from app.agent.templates import LLM_UNAVAILABLE_RESPONSE
 from app.db.repositories.chat_message_repository import ChatMessageRepository
 from app.db.repositories.session_repository import SessionRepository
 from app.llm.providers.unavailable import LLMUnavailableError
+from app.llm.usage_context import llm_call_identity
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +57,11 @@ class ChatService:
 
         config = {"configurable": {"thread_id": str(session_id)}}
         try:
-            result = await self._graph.ainvoke(
-                {"utterance": message, "company_id": str(company_id), "session_id": str(session_id), "now": now},
-                config=config,
-            )
+            with llm_call_identity(company_id, user_id, session_id):
+                result = await self._graph.ainvoke(
+                    {"utterance": message, "company_id": str(company_id), "session_id": str(session_id), "now": now},
+                    config=config,
+                )
             response_text = result.get("response_text") or ""
             intent = result.get("final_intent")
             tool_called = result.get("tool_name")

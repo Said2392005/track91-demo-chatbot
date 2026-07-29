@@ -104,7 +104,8 @@ class LLMIntentClassifier(IntentClassifier):
             [
                 Message(role="system", content=_LLM_SYSTEM_PROMPT),
                 Message(role="user", content=utterance),
-            ]
+            ],
+            call_type="intent_classification",
         )
         label = response.content.strip().strip('"').strip()
         # Tolerate a JSON-wrapped reply (e.g. {"intent": "GET_VEHICLE_SPEED"}) without requiring it.
@@ -119,11 +120,17 @@ class LLMIntentClassifier(IntentClassifier):
         return "OUT_OF_SCOPE"
 
 
-def get_intent_classifier() -> IntentClassifier:
+def get_intent_classifier(llm: LLMProvider | None = None) -> IntentClassifier:
+    """`llm`, when passed, overrides the default app.llm.factory.get_llm_provider() singleton
+    — app/main.py passes the usage-tracking-wrapped provider here so LLM-strategy
+    classification is tracked identically to every other real LLM call, instead of silently
+    picking up the unwrapped cached singleton on its own."""
     from app.core.config import settings
 
     if settings.intent_classifier_strategy == "llm":
-        from app.llm.factory import get_llm_provider
+        if llm is None:
+            from app.llm.factory import get_llm_provider
 
-        return LLMIntentClassifier(get_llm_provider())
+            llm = get_llm_provider()
+        return LLMIntentClassifier(llm)
     return RuleBasedIntentClassifier()

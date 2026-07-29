@@ -22,6 +22,7 @@ async def phrase_tool_result(utterance: str, tool_result, llm: LLMProvider) -> s
         [
             Message(role="system", content=SYNTHESIS_SYSTEM_PROMPT),
             Message(role="user", content=prompt),
-        ]
+        ],
+        call_type="response_synthesis",
     )
     return response.content

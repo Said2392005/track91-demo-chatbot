@@ -11,16 +11,19 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.agent.graph import build_graph
-from app.api.routers import auth, chat, health
+from app.api.routers import auth, chat, health, usage
 from app.core.config import settings
 from app.core.logging import configure_logging, request_id_var, session_id_var
 from app.db.client import get_database
+from app.db.repositories.llm_usage_repository import LLMUsageRepository
 from app.db.repositories.session_repository import SessionRepository
 from app.kb.chroma_client import get_kb_collection
 from app.llm.factory import get_llm_provider
+from app.llm.usage_tracking import TrackingLLMProvider
 from app.memory.checkpointer import get_checkpointer
 from app.nlu.intent_classifier import get_intent_classifier
 from app.tools.fleet_gps_client import MockFleetGPSClient
@@ -34,10 +37,15 @@ async def lifespan(app: FastAPI):
 
     db = get_database()
     app.state.db = db
+    # Wrapped once here, not inside get_llm_provider() itself (which is @lru_cache'd and has
+    # no db to hand a repository to) — passed into both get_intent_classifier() and
+    # build_graph() so intent classification (when LLM_PROVIDER strategy is "llm") and every
+    # other real LLM call are tracked through the identical wrapper instance.
+    tracked_llm = TrackingLLMProvider(get_llm_provider(), LLMUsageRepository(db), provider_name=settings.llm_provider)
     app.state.graph = build_graph(
-        classifier=get_intent_classifier(),
+        classifier=get_intent_classifier(llm=tracked_llm),
         db=db,
-        llm=get_llm_provider(),
+        llm=tracked_llm,
         gps_client=MockFleetGPSClient(),
         kb_collection=get_kb_collection(),
         session_repo=SessionRepository(db),
@@ -50,6 +58,17 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Track91 Fleet Chatbot", lifespan=lifespan)
+
+    # Permissive dev-only CORS so a standalone local HTML test page (file:// or a different
+    # localhost port) can call this API from the browser. Tighten to explicit origins before
+    # any real deployment (Phase 13) — not addressed here since that phase is on hold.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.middleware("http")
     async def correlation_middleware(request: Request, call_next):
@@ -80,6 +99,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(chat.router)
+    app.include_router(usage.router)
 
     return app
 

@@ -12,6 +12,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.core.security import InvalidTokenError, decode_access_token
 from app.db.repositories.chat_message_repository import ChatMessageRepository
+from app.db.repositories.llm_usage_repository import LLMUsageRepository
 from app.db.repositories.session_repository import SessionRepository
 from app.db.repositories.user_repository import UserRepository
 from app.services.auth_service import AuthService
@@ -38,6 +39,10 @@ def get_session_repo(db: AsyncIOMotorDatabase = Depends(get_db)) -> SessionRepos
 
 def get_message_repo(db: AsyncIOMotorDatabase = Depends(get_db)) -> ChatMessageRepository:
     return ChatMessageRepository(db)
+
+
+def get_llm_usage_repo(db: AsyncIOMotorDatabase = Depends(get_db)) -> LLMUsageRepository:
+    return LLMUsageRepository(db)
 
 
 def get_auth_service(user_repo: UserRepository = Depends(get_user_repo)) -> AuthService:

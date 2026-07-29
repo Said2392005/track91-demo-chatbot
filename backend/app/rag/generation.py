@@ -19,6 +19,7 @@ async def generate_cited_answer(query: str, context: AssembledContext, llm: LLMP
         [
             Message(role="system", content=GENERATION_SYSTEM_PROMPT),
             Message(role="user", content=prompt),
-        ]
+        ],
+        call_type="rag_generation",
     )
     return response.content

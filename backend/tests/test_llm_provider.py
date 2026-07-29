@@ -49,6 +49,48 @@ async def test_deepseek_provider_builds_request_and_parses_response():
     assert b'"hi"' in captured["body"]
 
 
+async def test_deepseek_provider_parses_token_usage_from_response():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": "deepseek-chat",
+                "choices": [{"message": {"role": "assistant", "content": "hello back"}}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 5, "total_tokens": 17},
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://api.deepseek.com")
+    provider = DeepSeekProvider(api_key="test-key", client=client)
+
+    response = await provider.generate([Message(role="user", content="hi")])
+
+    assert response.usage is not None
+    assert response.usage.prompt_tokens == 12
+    assert response.usage.completion_tokens == 5
+
+
+async def test_deepseek_provider_usage_is_none_when_response_omits_it():
+    """Same shape a local Ollama deployment would produce — no `usage` key at all. Must not
+    crash; must not guess/default to 0 (0 tokens and "unknown" are different facts)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": "some-local-model",
+                "choices": [{"message": {"role": "assistant", "content": "hello back"}}],
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://api.deepseek.com")
+    provider = DeepSeekProvider(api_key="test-key", client=client)
+
+    response = await provider.generate([Message(role="user", content="hi")])
+
+    assert response.usage is None
+
+
 async def test_deepseek_provider_raises_on_http_error():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": "unauthorized"})
@@ -134,3 +176,19 @@ async def test_llm_intent_classifier_falls_back_to_out_of_scope_on_invalid_label
     classifier = LLMIntentClassifier(fake)
     result = await classifier.classify("gibberish")
     assert result == "OUT_OF_SCOPE"
+
+
+async def test_get_intent_classifier_uses_the_passed_llm_override(monkeypatch):
+    """app/main.py passes the usage-tracking-wrapped provider here so LLM-strategy
+    classification is tracked like every other real LLM call, instead of silently picking up
+    the unwrapped get_llm_provider() singleton on its own."""
+    from app.core.config import settings
+    from app.nlu.intent_classifier import get_intent_classifier
+
+    monkeypatch.setattr(settings, "intent_classifier_strategy", "llm")
+    fake = FakeLLMProvider(canned_response="GREETING")
+
+    classifier = get_intent_classifier(llm=fake)
+
+    assert isinstance(classifier, LLMIntentClassifier)
+    assert classifier._llm is fake

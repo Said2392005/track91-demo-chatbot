@@ -122,4 +122,16 @@ INDEX_DEFINITIONS: dict[str, list[tuple[list[tuple[str, int]], dict]]] = {
             {"name": "title_version_unique", "unique": True},
         ),
     ],
+    "llm_usage": [
+        (
+            # The summary-over-time-period endpoint's access path: sum usage for a company
+            # between two timestamps.
+            [("company_id", ASCENDING), ("created_at", ASCENDING)],
+            {"name": "company_time_idx"},
+        ),
+        (
+            [("company_id", ASCENDING), ("user_id", ASCENDING), ("created_at", ASCENDING)],
+            {"name": "company_user_time_idx"},
+        ),
+    ],
 }

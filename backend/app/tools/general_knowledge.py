@@ -24,7 +24,8 @@ async def answer_general_knowledge(query: str, llm: LLMProvider) -> str:
         [
             Message(role="system", content=GENERAL_KNOWLEDGE_SYSTEM_PROMPT),
             Message(role="user", content=query),
-        ]
+        ],
+        call_type="general_knowledge",
     )
     return response.content
 
