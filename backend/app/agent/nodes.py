@@ -21,7 +21,8 @@ import dataclasses
 from app.agent.response_synthesis import phrase_tool_result
 from app.agent.serialization import entities_to_object_ids, sanitize_for_state, to_object_id
 from app.agent.state import AgentState
-from app.agent.templates import direct_response
+from app.agent.templates import LLM_UNAVAILABLE_RESPONSE, direct_response
+from app.llm.providers.unavailable import LLMUnavailableError
 from app.memory.active_entity_tracker import get_active_entities, set_active_entity
 from app.nlu.pipeline import analyze
 from app.router.router import RouteDecision, execute_tool, route
@@ -164,7 +165,15 @@ def make_mongo_tool_node(db):
 
 def make_rag_tool_node(llm, kb_collection):
     async def rag_tool_node(state: AgentState) -> dict:
-        result = await execute_tool(_decision_from_state(state), llm=llm, kb_collection=kb_collection)
+        # Caught here, not left to propagate: an unhandled LLMUnavailableError would abort the
+        # graph before memory_update_node runs, silently losing an already-resolved entity
+        # (e.g. an explicit vehicle_ref this turn) just because *generation* failed — found by
+        # actually running the server end-to-end with no LLM configured, not by inspection. See
+        # templates.LLM_UNAVAILABLE_RESPONSE's docstring for the full story.
+        try:
+            result = await execute_tool(_decision_from_state(state), llm=llm, kb_collection=kb_collection)
+        except LLMUnavailableError:
+            return {"tool_result": {"answer": LLM_UNAVAILABLE_RESPONSE, "citations": [], "llm_invoked": False}}
         # RAGResult (RAG subsystem) -> plain dict; GENERAL_KNOWLEDGE's handler already returns
         # a plain str. Both are already checkpoint-safe (no ObjectId/datetime involved), but
         # asdict() keeps the dataclass out of state for a uniform, plain-data shape.
@@ -193,8 +202,13 @@ def make_synthesis_node(llm):
                 return {"response_text": tool_result["answer"], "citations": tool_result.get("citations", [])}
             return {"response_text": str(tool_result)}
 
-        # LIVE_API / MONGO_REPO: raw structured data, not yet natural language.
-        text = await phrase_tool_result(state["utterance"], tool_result, llm)
+        # LIVE_API / MONGO_REPO: raw structured data, not yet natural language. Same
+        # catch-inside-the-node reasoning as rag_tool_node above — must not abort the graph
+        # before memory_update_node runs.
+        try:
+            text = await phrase_tool_result(state["utterance"], tool_result, llm)
+        except LLMUnavailableError:
+            text = LLM_UNAVAILABLE_RESPONSE
         return {"response_text": text}
 
     return synthesis_node

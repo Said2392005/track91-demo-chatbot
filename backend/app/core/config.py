@@ -46,5 +46,15 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 24 * 60 * 60
     active_entity_ttl_seconds: int = 30 * 60
 
+    # Phase 11: JWT auth. No production default for jwt_secret_key — deliberately not given a
+    # baked-in fallback, so a deployment that forgets to set it fails loudly at startup rather
+    # than silently signing tokens with a well-known string. Fine to be empty for local dev
+    # (tests set their own).
+    jwt_secret_key: str = ""
+    jwt_algorithm: str = "HS256"
+    jwt_expiry_minutes: int = 60 * 12  # 12h
+
+    log_level: str = "INFO"
+
 
 settings = Settings()

@@ -15,8 +15,14 @@ from datetime import datetime, timedelta, timezone
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from app.core.security import hash_password
 from app.db.client import get_database
 from app.db.init_db import init_db
+
+# Phase 11: a login-capable demo account so the seeded data is directly usable for end-to-end
+# manual testing (POST /auth/login). This is synthetic dev-only data per non-goals.md — never
+# use this password for anything beyond a local/dev instance.
+DEMO_PASSWORD = "demo1234"  # noqa: S105 (not a real secret — local dev seed data only)
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +75,7 @@ async def seed(db: AsyncIOMotorDatabase | None = None) -> None:
                     "email": u["email"],
                     "role": u["role"],
                     "status": "active",
+                    "password_hash": hash_password(DEMO_PASSWORD),
                     "created_at": now,
                 }
             },

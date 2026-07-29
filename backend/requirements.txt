@@ -9,3 +9,8 @@ pyyaml==6.0.3
 httpx==0.28.1
 langgraph==1.2.9
 langgraph-checkpoint-mongodb==0.4.0
+fastapi==0.140.9
+uvicorn[standard]==0.51.0
+pyjwt==2.13.0
+bcrypt==5.0.0
+email-validator==2.3.0

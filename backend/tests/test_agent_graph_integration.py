@@ -162,3 +162,49 @@ async def test_greeting_then_pricing_question_across_turns(db, kb_collection, re
     assert turn2["response_text"] == "The Pro plan is ₹899/vehicle/month. [Source 1]"
     assert turn2["citations"]
     assert all(c["title"] == "Track91 Pricing Sheet" for c in turn2["citations"])
+
+
+async def test_memory_persists_even_when_synthesis_llm_is_unavailable(db, kb_collection, real_checkpointer):
+    """Regression test for a bug found by actually running the server end-to-end with no LLM
+    API key configured (the real deployment condition in this environment): turn 1 correctly
+    resolves an explicit vehicle_ref, but generation fails (UnavailableLLMProvider). Before the
+    fix, LLMUnavailableError propagated out of synthesis_node and aborted the graph before
+    memory_update_node ran, silently losing the resolved vehicle. Proven here by switching to a
+    WORKING LLM for turn 2 and confirming "its speed" still resolves via memory — if turn 1's
+    entity resolution hadn't persisted, turn 2 would need clarification instead."""
+    from app.llm.providers.unavailable import UnavailableLLMProvider
+
+    company_id, vehicle_id = ObjectId(), ObjectId()
+    now = datetime.now(timezone.utc)
+    await db.vehicles.insert_one(
+        {"_id": vehicle_id, "company_id": company_id, "plate_number": "MH12AB1234", "status": "active", "created_at": now}
+    )
+    session = await SessionRepository(db).create(company_id, ObjectId(), now)
+    session_id = session["_id"]
+    config = {"configurable": {"thread_id": str(session_id)}}
+
+    unavailable_graph = _graph(db, kb_collection, real_checkpointer, llm=UnavailableLLMProvider())
+    turn1 = await unavailable_graph.ainvoke(
+        {"utterance": "Where is MH12AB1234?", "company_id": str(company_id), "session_id": str(session_id), "now": now},
+        config=config,
+    )
+    assert turn1["route_outcome"] == "TOOL_CALL"
+    assert "unable to generate" in turn1["response_text"].lower()
+
+    active_entities, _ = await SessionRepository(db).get_active_entities(company_id, session_id)
+    assert active_entities.get("vehicle_id") == vehicle_id, "memory_update_node must still run when synthesis fails"
+
+    working_graph = _graph(
+        db, kb_collection, real_checkpointer, llm=FakeLLMProvider(canned_response="It's going 42 km/h.")
+    )
+    turn2 = await working_graph.ainvoke(
+        {
+            "utterance": "What's its speed?",
+            "company_id": str(company_id),
+            "session_id": str(session_id),
+            "now": now + timedelta(minutes=1),
+        },
+        config=config,
+    )
+    assert turn2["final_intent"] == "GET_VEHICLE_SPEED"
+    assert turn2["route_outcome"] == "TOOL_CALL", "must resolve via memory, not need clarification"
