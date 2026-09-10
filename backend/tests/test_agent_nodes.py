@@ -87,7 +87,13 @@ async def test_router_node_produces_tool_call_for_live_api_intent():
     router_node = nodes.make_router_node()
     vehicle_id_str = str(ObjectId())
     result = await router_node(
-        {"raw_intent": "GET_VEHICLE_SPEED", "final_intent": "GET_VEHICLE_SPEED", "entities": {"vehicle_id": vehicle_id_str}, "active_entities": {}}
+        {
+            "utterance": "How fast is MH12AB1234 going?",
+            "raw_intent": "GET_VEHICLE_SPEED",
+            "final_intent": "GET_VEHICLE_SPEED",
+            "entities": {"vehicle_id": vehicle_id_str},
+            "active_entities": {},
+        }
     )
     assert result["route_outcome"] == "TOOL_CALL"
     assert result["subsystem"] == "LIVE_API"
@@ -101,7 +107,13 @@ async def test_router_node_routes_on_raw_intent_not_downgraded_final_intent():
     tests/test_agent_graph_integration.py's active-entity-expiry scenario."""
     router_node = nodes.make_router_node()
     result = await router_node(
-        {"raw_intent": "GET_VEHICLE_SPEED", "final_intent": "CLARIFICATION_NEEDED", "entities": {}, "active_entities": {}}
+        {
+            "utterance": "What's its speed?",
+            "raw_intent": "GET_VEHICLE_SPEED",
+            "final_intent": "CLARIFICATION_NEEDED",
+            "entities": {},
+            "active_entities": {},
+        }
     )
     assert result["route_outcome"] == "CLARIFICATION_NEEDED"
     assert result["clarifying_question"]
@@ -119,6 +131,7 @@ async def test_router_node_corrects_final_intent_when_memory_fill_resolves_it():
     active_vehicle_id = str(ObjectId())
     result = await router_node(
         {
+            "utterance": "where is my vehicle",
             "raw_intent": "GET_VEHICLE_LOCATION",
             "final_intent": "CLARIFICATION_NEEDED",
             "entities": {},
@@ -135,9 +148,37 @@ async def test_router_node_leaves_final_intent_alone_when_clarification_still_ne
     rewritten to the still-unresolved raw_intent."""
     router_node = nodes.make_router_node()
     result = await router_node(
-        {"raw_intent": "GET_VEHICLE_LOCATION", "final_intent": "CLARIFICATION_NEEDED", "entities": {}, "active_entities": {}}
+        {
+            "utterance": "where is my vehicle",
+            "raw_intent": "GET_VEHICLE_LOCATION",
+            "final_intent": "CLARIFICATION_NEEDED",
+            "entities": {},
+            "active_entities": {},
+        }
     )
     assert result["route_outcome"] == "CLARIFICATION_NEEDED"
+    assert result["final_intent"] == "CLARIFICATION_NEEDED"
+
+
+async def test_router_node_does_not_fill_vehicle_from_memory_when_utterance_asks_about_driver():
+    """Real bug, reproduced live: "where is my driver" (in a session with an already-active
+    vehicle) classified as GET_VEHICLE_LOCATION via the bare "where is" phrase — Phase 6
+    correctly left vehicle_ref unresolved (no pronoun in "my driver"), but route()'s own
+    unconditional active-entity fallback filled in the stale vehicle anyway, producing a
+    confident, specific-sounding but wrong-context GPS answer instead of a clarifying
+    question. Must now correctly ask for clarification instead."""
+    router_node = nodes.make_router_node()
+    active_vehicle_id = str(ObjectId())
+    result = await router_node(
+        {
+            "utterance": "where is my driver",
+            "raw_intent": "GET_VEHICLE_LOCATION",
+            "final_intent": "CLARIFICATION_NEEDED",
+            "entities": {},
+            "active_entities": {"vehicle_id": active_vehicle_id},
+        }
+    )
+    assert result["route_outcome"] == "CLARIFICATION_NEEDED", "must not silently answer with the stale active vehicle"
     assert result["final_intent"] == "CLARIFICATION_NEEDED"
 
 

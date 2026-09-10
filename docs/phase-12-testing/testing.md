@@ -132,17 +132,17 @@ likely explanation is local resource contention, not an application bug — but 
 isolated, and is reported as an open question for testing in a dedicated environment, not
 claimed as diagnosed.
 
-## Real-model verification — completed with Groq (free tier), not DeepSeek
+## Real-model verification — history: DeepSeek (planned) → Groq (interim) → Bedrock (current)
 
-A paid DeepSeek key wasn't available, so `GroqProvider` (`app/llm/providers/groq.py`) was added
-as a second, free-tier `LLMProvider` adapter — OpenAI-compatible, same interface, config-driven
-swap (`LLM_PROVIDER=groq`) per ADR 002. `DeepSeekProvider` and `GroqProvider` were refactored to
-share `OpenAICompatibleProvider` (`app/llm/providers/openai_compatible.py`) once a second real
-concrete adapter needed the identical request/response handling — extracted because the reuse
-was immediate and real, not speculative.
+A paid DeepSeek key was never available, so `GroqProvider` (OpenAI-compatible, free tier) was
+added as an interim second `LLMProvider` adapter, config-driven swap (`LLM_PROVIDER=groq`) per
+ADR 002. `DeepSeekProvider` and `GroqProvider` were refactored to share
+`OpenAICompatibleProvider` once a second real concrete adapter needed the identical
+request/response handling — extracted because the reuse was immediate and real, not
+speculative.
 
-With `GROQ_API_KEY` configured (`backend/.env`, gitignored, never committed) and
-`LLM_PROVIDER=groq`, the real server was started and driven with real HTTP requests:
+With `GROQ_API_KEY` configured and `LLM_PROVIDER=groq`, the real server was started and driven
+with real HTTP requests:
 
 - **The "its speed" scenario**: turn 1 ("Where is MH12AB1234?") returned a real
   Groq-generated location answer; turn 2 ("What's its speed?"), same session, correctly
@@ -158,15 +158,75 @@ With `GROQ_API_KEY` configured (`backend/.env`, gitignored, never committed) and
   evidence rather than just the design claim, that these four metrics never depended on the
   LLM's actual output.
 
+DeepSeek and Groq were both later removed in favor of `BedrockProvider` (AWS Bedrock,
+gpt-oss-120b) — see the section below. This section is kept as the historical record of how the
+strategy pattern (ADR 002) played out across three providers, not as a description of what's
+currently configured.
+
+## Bedrock migration (gpt-oss-120b) — golden set and max_tokens re-verification
+
+`GroqProvider` and `OpenAICompatibleProvider` were deleted; `BedrockProvider`
+(`app/llm/providers/bedrock.py`) is now the only configured provider (`LLM_PROVIDER=bedrock`).
+It uses boto3, not HTTP, so it doesn't extend `OpenAICompatibleProvider` — but gpt-oss's
+response body has the same `choices`/`usage` shape as the OpenAI chat-completions API, so usage
+parsing was pulled into a small shared module (`app/llm/providers/usage.py`) rather than
+importing a private function across adapters. gpt-oss also emits a hidden
+`<reasoning>...</reasoning>` block before the visible answer, stripped inside the adapter so it
+never reaches synthesis or the user (with a defensive fallback for an unclosed tag — see
+`bedrock.py`'s module docstring; not observed in practice, since Bedrock appears to always close
+the tag even under truncation, but that's not a documented contract).
+
+**Golden set, real LLM, both providers** (`python -m app.eval.runner --real-llm`, run against
+each provider in turn): identical results —
+
+| Metric | Groq/Llama-3.3 | Bedrock/gpt-oss-120b |
+|---|---|---|
+| Raw intent accuracy | 100.0% | 100.0% |
+| Final intent accuracy | 100.0% | 100.0% |
+| Entity accuracy | 100.0% | 100.0% |
+| Retrieval precision | 100.0% | 100.0% |
+| Citation groundedness | 100.0% | 100.0% |
+
+This isn't a coincidence and isn't evidence the two models produce identical prose — it's a
+consequence of what the harness actually measures, already noted above: `intent_classifier_strategy`
+defaults to `rule_based` (LLM-independent), and `score_citation_groundedness` checks which
+*retrieved* chunks were used to build the context (`context.citations`, from
+`app/rag/context_assembler.py`), not anything parsed out of the LLM's generated text. Swapping
+the LLM provider cannot move any of these four numbers by construction; what the run does
+confirm is that all 15 real RAG generation calls against Bedrock complete without error, same
+as Groq. True per-provider answer-quality comparison would need human/model-graded review of
+the actual generated prose, which this harness still doesn't attempt (real LLM or not — same
+caveat as before).
+
+**`llm_max_tokens` re-measurement**: 250 was tuned for Groq/Llama-3.3, which doesn't emit a
+reasoning block. gpt-oss spends completion tokens on `<reasoning>` *before* the visible answer,
+shrinking the effective budget for the same cap — confirmed by re-running
+`TROUBLESHOOTING_DEVICE` (the same longest-answer case from the original Groq measurement)
+directly against Bedrock:
+
+| max_tokens | Repeated real calls | Truncated (`finish_reason="length"`) | Worst completion_tokens |
+|---|---|---|---|
+| 250 | 3 | 3/3 | 250 (cap) |
+| 350 | 6 | 1/6 | 350 (cap) |
+| 400 | 6 | 1/6 | 400 (cap) |
+| 450 | 6 | 0/6 | 428 |
+| 500 | 12 (two batches) | 0/12 | 388 |
+
+`llm_max_tokens` is now **500** (`app/core/config.py`, `.env.example`) — cleared with headroom
+above the worst observed completion-token count. See `tests/test_max_tokens_real_bedrock.py`
+for the regression tripwire (the Bedrock counterpart of the now-deleted
+`test_max_tokens_real_groq.py`), which also confirms `<reasoning>` never leaks into a visible
+answer, truncated or not.
+
 ## Switching the eval harness / load test to a real LLM
 
-`python -m app.eval.runner --real-llm` uses `get_llm_provider()` — whichever provider
-`LLM_PROVIDER` selects (`deepseek` or `groq`), both behind the identical interface. The
-citation-groundedness proxy stays meaningful either way (it never depended on the LLM's actual
-output, now confirmed above); true answer-faithfulness scoring (comparing generated prose
-against source content, not just checking citations) would need systematic human or
-model-graded review of real output and isn't attempted here — that's the one metric this
-harness still can't fully automate, real LLM or not.
+`python -m app.eval.runner --real-llm` uses `get_llm_provider()` — currently always Bedrock,
+but the call site doesn't know or care which provider `LLM_PROVIDER` selects. The
+citation-groundedness proxy stays meaningful regardless of provider (it never depended on the
+LLM's actual output, now confirmed above for both Groq and Bedrock); true answer-faithfulness
+scoring (comparing generated prose against source content, not just checking citations) would
+need systematic human or model-graded review of real output and isn't attempted here — that's
+the one metric this harness still can't fully automate, real LLM or not.
 
 ## Testing
 

@@ -51,12 +51,29 @@ class RouteDecision:
     missing_entity: str | None = None
 
 
-def route(intent: str, entities: dict, memory_state: dict | None = None) -> RouteDecision:
+def route(
+    intent: str, entities: dict, memory_state: dict | None = None, ambiguous: dict | None = None
+) -> RouteDecision:
     spec = INTENT_SPECS.get(intent)
     if spec is None:
         return RouteDecision(outcome="UNKNOWN_INTENT", intent=intent)
 
     if spec.subsystem == "NONE":
+        # A bare 4-digit first message (app/nlu/entity_extractor.py's
+        # resolve_first_message_bare_last4, called from app/nlu/pipeline.py when nothing else
+        # classified) reaches here as intent="OUT_OF_SCOPE" — a real NONE-subsystem intent,
+        # never swapped to anything else since there's no actionable intent to swap it to — but
+        # may still carry a resolved (or colliding) vehicle in `ambiguous`. That deserves a real
+        # clarifying question, not the generic NO_TOOL response every other NONE-subsystem
+        # intent gets.
+        vehicle_ambiguous = (ambiguous or {}).get("vehicle_ref")
+        if vehicle_ambiguous and vehicle_ambiguous.get("reason", "").startswith("identified_no_intent"):
+            return RouteDecision(
+                outcome="CLARIFICATION_NEEDED",
+                intent=intent,
+                clarifying_question=clarifying_question("vehicle_ref", vehicle_ambiguous),
+                missing_entity="vehicle_ref",
+            )
         return RouteDecision(outcome="NO_TOOL", intent=intent)
 
     if not spec.mvp:
@@ -73,11 +90,13 @@ def route(intent: str, entities: dict, memory_state: dict | None = None) -> Rout
         missing.append("one_of:" + "|".join(spec.required_one_of))
 
     if missing:
+        missing_req = missing[0]
+        vehicle_ambiguous = (ambiguous or {}).get("vehicle_ref") if missing_req == "vehicle_ref" else None
         return RouteDecision(
             outcome="CLARIFICATION_NEEDED",
             intent=intent,
-            clarifying_question=clarifying_question(missing[0]),
-            missing_entity=missing[0],
+            clarifying_question=clarifying_question(missing_req, vehicle_ambiguous),
+            missing_entity=missing_req,
         )
 
     tool = TOOL_REGISTRY.get(intent)

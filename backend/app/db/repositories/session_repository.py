@@ -1,11 +1,17 @@
 """
-Session repository — ADR 001 (repository pattern) / ADR 004 (company_id required, no default).
+Session repository — owns `chat_sessions`, now scoped by `product_id` (was `company_id`),
+matching the new schema's chat_sessions(product_id, prompt_id, user_id, session_key, ip_hash,
+status, started_at, ended_at, last_active_at).
 
-Owns `chat_sessions`: our own business-level session/active-entity data. Deliberately separate
-from LangGraph's own checkpoint collections (app/memory/checkpointer.py) — those store raw
-graph/message state keyed by thread_id via LangGraph's own serialization protocol, while
-`active_entities` is domain data (which vehicle/driver/geofence is "active" for coreference,
-Phase 6) that app/memory/active_entity_tracker.py reads directly as a plain dict.
+BREAKING CHANGE, left unresolved here: the old chat_sessions also carried `active_entities`
+(which vehicle/driver/geofence is "active" for coreference) and `pending_clarification`
+(cross-turn clarification state) — both fleet-domain NLU/coreference concepts with no field in
+the new schema and no defined replacement. Their accessor methods (get_active_entities,
+set_active_entity, set_pending_clarification, pop_pending_clarification) are removed here, not
+reimplemented against something that doesn't exist. Callers — app/router/router.py,
+app/router/clarification.py, app/nlu/coreference.py, app/memory/active_entity_tracker.py,
+app/agent/nodes.py — still call the old methods and will break until the NLU/agent layer's
+replacement design is decided (see the standalone report on that gap).
 """
 
 from datetime import datetime
@@ -18,9 +24,9 @@ class SessionRepository:
     def __init__(self, db: AsyncIOMotorDatabase):
         self._db = db
 
-    async def create(self, company_id: ObjectId, user_id: ObjectId, now: datetime) -> dict:
+    async def create(self, product_id: ObjectId, user_id: ObjectId | None, now: datetime) -> dict:
         doc = {
-            "company_id": company_id,
+            "product_id": product_id,
             "user_id": user_id,
             "status": "active",
             "started_at": now,
@@ -30,63 +36,19 @@ class SessionRepository:
         doc["_id"] = result.inserted_id
         return doc
 
-    async def get(self, company_id: ObjectId, session_id: ObjectId) -> dict | None:
-        return await self._db.chat_sessions.find_one({"company_id": company_id, "_id": session_id})
+    async def get(self, product_id: ObjectId, session_id: ObjectId) -> dict | None:
+        return await self._db.chat_sessions.find_one({"product_id": product_id, "_id": session_id})
 
-    async def touch(self, company_id: ObjectId, session_id: ObjectId, now: datetime) -> None:
-        """Bumps last_active_at — the field the session-level TTL index (indexes.py) uses to
-        implement a sliding idle-timeout. Call on every turn."""
+    async def get_by_session_key(self, session_key: str) -> dict | None:
+        return await self._db.chat_sessions.find_one({"session_key": session_key})
+
+    async def touch(self, product_id: ObjectId, session_id: ObjectId, now: datetime) -> None:
         await self._db.chat_sessions.update_one(
-            {"company_id": company_id, "_id": session_id}, {"$set": {"last_active_at": now}}
+            {"product_id": product_id, "_id": session_id}, {"$set": {"last_active_at": now}}
         )
 
-    async def get_active_entities(self, company_id: ObjectId, session_id: ObjectId) -> tuple[dict, datetime | None]:
-        doc = await self.get(company_id, session_id)
-        if doc is None:
-            return {}, None
-        return doc.get("active_entities", {}), doc.get("active_entities_updated_at")
-
-    async def set_active_entity(
-        self,
-        company_id: ObjectId,
-        session_id: ObjectId,
-        entity_type: str,
-        entity_id: ObjectId,
-        now: datetime,
-    ) -> None:
-        """Last-reference-wins: setting a new active vehicle replaces the previous one for that
-        type, rather than stacking a history — resolves the open question in
-        docs/phase-1-planning/entity-taxonomy.md's Phase 8 notes."""
+    async def close(self, product_id: ObjectId, session_id: ObjectId, now: datetime) -> None:
         await self._db.chat_sessions.update_one(
-            {"company_id": company_id, "_id": session_id},
-            {
-                "$set": {
-                    f"active_entities.{entity_type}_id": entity_id,
-                    "active_entities_updated_at": now,
-                    "last_active_at": now,
-                }
-            },
+            {"product_id": product_id, "_id": session_id},
+            {"$set": {"status": "closed", "ended_at": now, "last_active_at": now}},
         )
-
-    async def set_pending_clarification(
-        self, company_id: ObjectId, session_id: ObjectId, intent: str, missing: str, now: datetime
-    ) -> None:
-        """Records "we asked a clarifying question for `intent`, still missing `missing`" so
-        the very next turn (entry_node's pop_pending_clarification) can complete `intent`
-        directly if that turn's message resolves just the missing piece, instead of
-        re-classifying from scratch and falling through to OUT_OF_SCOPE."""
-        await self._db.chat_sessions.update_one(
-            {"company_id": company_id, "_id": session_id},
-            {"$set": {"pending_clarification": {"intent": intent, "missing": missing}, "last_active_at": now}},
-        )
-
-    async def pop_pending_clarification(self, company_id: ObjectId, session_id: ObjectId) -> dict | None:
-        """Read-and-clear in one atomic op — pending_clarification is single-turn scoped by
-        construction: whether or not this turn's message actually resolves it, it must not
-        still be sitting there confusing some unrelated later message."""
-        doc = await self._db.chat_sessions.find_one_and_update(
-            {"company_id": company_id, "_id": session_id}, {"$unset": {"pending_clarification": ""}}
-        )
-        if doc is None:
-            return None
-        return doc.get("pending_clarification")

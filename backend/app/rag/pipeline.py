@@ -34,7 +34,19 @@ async def answer_kb_query(
     llm: LLMProvider,
     collection: Collection | None = None,
     top_k: int = 6,
-    context_top_n: int = 4,
+    # Was 4; reduced for token cost (a token-usage investigation, not a prior bug) after
+    # measuring real Groq prompt_tokens on representative queries: 4->3 saved ~90 tokens/call
+    # (~17%), with golden-set citation groundedness *improving* (81.8% -> 100%) rather than
+    # dropping — the 4th, least-relevant chunk was apparently what the two previously-failing
+    # cases (app_faq_1, troubleshooting_2) were citing. 2 was also measured (saves ~173
+    # tokens/call total, also 100% on the golden set) but not shipped: the 45-case golden set
+    # doesn't cover every real phrasing, and 2 chunks is a much thinner real-world margin than
+    # 3 for a token savings only marginally larger than 4->3 already captured. Note: top_k
+    # (the retrieval POOL size, currently 6) has zero effect on prompt token cost by itself —
+    # confirmed empirically — since assemble_context()/assemble_pricing_context() always
+    # truncate to context_top_n regardless of pool size; top_k only matters for having enough
+    # candidates for the PRICING gate to filter through (see context_assembler.py).
+    context_top_n: int = 3,
     use_reranking: bool | None = None,
 ) -> RAGResult:
     retrieved = retrieve(query, top_k=top_k, collection=collection)

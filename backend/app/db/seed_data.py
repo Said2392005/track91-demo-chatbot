@@ -1,10 +1,37 @@
 """
-Synthetic seed data — NONE of this represents a real company, vehicle, or person.
-Per docs/phase-1-planning/non-goals.md ("all data is mocked/synthetic for this build"), this
-exists purely to exercise the schema, indexes, and later phases (RAG golden set, eval harness).
+Seed data: real Track91 content plus the pre-existing synthetic "Cosmica Test Org" fixture.
 
-Idempotent: keyed upserts on natural keys (company name, plate_number, driver name, etc.) so
-re-running this script does not create duplicates.
+`seed_track91()` is transcribed verbatim from the live Track91 marketing site (hero copy,
+feature blocks, reporting section, "Built for every fleet" vehicle-type list, and the full
+Privacy Policy) as supplied 2026-08-13 — real product content, not placeholder filler.
+
+`seed_cosmica_test_fixture()` is kept as-is from the earlier 2026-08-12 DBML-redesign fixture:
+it's a minimal synthetic org/user/session set that exercises every collection/index and backs
+loadtest/locustfile.py's login (admin@cosmica-test.example / demo1234) — removing it would
+silently break that documented load-test flow, so both fixtures now run side by side.
+
+Mapping notes (Track91):
+- organizations.plan_id is required by the DBML but no `plans` collection exists yet (see
+  schema_definitions.py's "Known gaps") — a placeholder ObjectId satisfies the validator only.
+- No domain/website URL appears anywhere in the supplied site copy (only a "Get it on Google
+  Play" CTA and the track91.app@gmail.com contact address) — website_url is deliberately left
+  unset rather than invented.
+- organizations has no dedicated "compliance" field, so the privacy-policy facts that are
+  compliance-relevant at the org level (what's collected, encryption in transit, no sale of
+  data, access restricted to the account holder) are folded into organizations.long_description
+  using the policy's own wording. The full policy text itself — the actually useful, searchable
+  KB content — lives in documents + document_chunks (one chunk per policy section), matching
+  this schema's existing document_chunks.content usage for RAG (see document_chunk_repository.py).
+- features.short_description holds each feature block's real badge label (REAL-TIME, MAP
+  TRACKING, ...); features.long_description holds the block's real description sentence.
+- categories are the vehicle types from the "Built for every fleet" list. No per-vehicle-type
+  description exists in the source copy, so none is fabricated — description is left unset.
+- services are the three real bullets under "Reporting"; short_description is the section's
+  real intro sentence, shared across all three since the source doesn't give per-bullet copy.
+
+Idempotent: keyed upserts on natural keys (organization_code, product title, feature/service/
+category title within the product, document title) so re-running this script does not create
+duplicates.
 
 Usage: python -m app.db.seed_data
 """
@@ -13,15 +40,16 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
+from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.core.security import hash_password
 from app.db.client import get_database
 from app.db.init_db import init_db
 
-# Phase 11: a login-capable demo account so the seeded data is directly usable for end-to-end
-# manual testing (POST /auth/login). This is synthetic dev-only data per non-goals.md — never
-# use this password for anything beyond a local/dev instance.
+# A login-capable demo account so the synthetic Cosmica Test fixture is directly usable for
+# end-to-end manual testing (POST /auth/login) and loadtest/locustfile.py. Synthetic dev-only
+# data — never use this password beyond a local/dev instance.
 DEMO_PASSWORD = "demo1234"  # noqa: S105 (not a real secret — local dev seed data only)
 
 logger = logging.getLogger(__name__)
@@ -31,28 +59,334 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# Fixed reference point for derived record timestamps (trip/alert/maintenance dates) used in
-# upsert filter keys. Deriving these from wall-clock `now()` instead would make the filter key
-# a moving target — a re-run at a different time would insert duplicates rather than match the
-# existing doc. `created_at`/`ingested_at`/etc. below are fine to timestamp with real `now()`
-# since they're only ever written via $setOnInsert (once, at first insert).
-SEED_ANCHOR = datetime(2026, 7, 27, 6, 0, tzinfo=timezone.utc)
-
-
 async def seed(db: AsyncIOMotorDatabase | None = None) -> None:
     db = db if db is not None else get_database()
     await init_db(db)
 
+    await seed_track91(db)
+    await seed_cosmica_test_fixture(db)
+
+
+async def seed_track91(db: AsyncIOMotorDatabase) -> None:
     now = _now()
 
-    company_id = (
-        await db.companies.find_one_and_update(
-            {"name": "Cosmica Test Fleets Pvt Ltd"},
+    # --- organizations --------------------------------------------------------------------
+    org_id = (
+        await db.organizations.find_one_and_update(
+            {"organization_code": "TRACK91"},
             {
                 "$setOnInsert": {
-                    "name": "Cosmica Test Fleets Pvt Ltd",
+                    # plan_id is required by the DBML but no `plans` collection exists to
+                    # reference — see schema_definitions.py's "Known gaps". A random ObjectId
+                    # placeholder, not a real reference, is used here only to satisfy the
+                    # `bsonType: objectId` validator.
+                    "plan_id": ObjectId(),
+                    "name": "Track91",
+                    "legal_name": "Track-91",
+                    "organization_code": "TRACK91",
+                    "organization_type": "vendor",
+                    "industry": "GPS Fleet Tracking / Transport Technology",
+                    "short_description": (
+                        "AIS-140 compliant GPS tracking for cars, trucks, buses, logistics "
+                        "fleets and EVs"
+                    ),
+                    "long_description": (
+                        "Track91 connects with AIS-140 compliant GPS devices to track cars, "
+                        "trucks, buses, logistics fleets and EVs in real time — built for "
+                        "India's government-mandated standard for commercial and public "
+                        "transport vehicles. To provide AIS-140 GPS tracking services, Track91 "
+                        "collects the IMEI number of any registered AIS-140 compliant GPS "
+                        "device, real-time and historical location data reported by registered "
+                        "devices, vehicle status data such as speed and ignition state, and "
+                        "basic account information (name, email address, phone number). "
+                        "Location and account data are encrypted in transit, and access to "
+                        "your data is restricted to your account. Track91 does not sell "
+                        "location or account data — information is only shared with trusted "
+                        "service providers, such as map and cloud infrastructure providers, "
+                        "strictly to operate the app."
+                    ),
+                    "contacts": {"primary_email": "track91.app@gmail.com"},
+                    "address": {"country": "India"},
                     "status": "active",
+                    "created_at": now,
+                }
+            },
+            upsert=True,
+            return_document=True,
+        )
+    )["_id"]
+
+    # --- products --------------------------------------------------------------------------
+    product_doc = await db.products.find_one_and_update(
+        {"org_id": org_id, "title": "Track91 AIS-140 GPS Tracking App"},
+        {
+            "$setOnInsert": {
+                "org_id": org_id,
+                "content_type": "app",
+                "category": "GPS Fleet Tracking",
+                "title": "Track91 AIS-140 GPS Tracking App",
+                "short_description": (
+                    "AIS-140 compliant GPS tracking for cars, trucks, buses, logistics fleets "
+                    "and EVs"
+                ),
+                "long_description": (
+                    "Register an IMEI. Track it live. Track91 connects with AIS-140 compliant "
+                    "GPS devices to track cars, trucks, buses, logistics fleets and EVs in real "
+                    "time — built for India's government-mandated standard for commercial and "
+                    "public transport vehicles. AIS-140 is a government-mandated GPS tracking "
+                    "standard in India, designed for commercial and public transport vehicles. "
+                    "It sets out how vehicle tracking devices must report location and status "
+                    "data. Track91 supports AIS-140 compliant tracking systems, so transport "
+                    "operators get reliable location monitoring, vehicle visibility and fleet "
+                    "management — while staying aligned with the standard. Track91 receives "
+                    "location data directly from installed AIS-140 GPS devices for reliable, "
+                    "industry-ready tracking."
+                ),
+                "items": [],
+                "keywords": [
+                    "AIS-140",
+                    "GPS tracking",
+                    "fleet management",
+                    "EV tracking",
+                    "IMEI",
+                ],
+                "status": "active",
+                "created_at": now,
+                "updated_at": now,
+            }
+        },
+        upsert=True,
+        return_document=True,
+    )
+    product_id = product_doc["_id"]
+
+    # --- categories: vehicle types from "Built for every fleet" -----------------------------
+    vehicle_categories = [
+        ("Cars", "cars"),
+        ("Trucks", "trucks"),
+        ("Buses", "buses"),
+        ("Commercial vehicles", "commercial-vehicles"),
+        ("Logistics fleets", "logistics-fleets"),
+        ("Delivery vehicles", "delivery-vehicles"),
+        ("Public transport vehicles", "public-transport-vehicles"),
+        ("Electric vehicles (EVs)", "electric-vehicles-evs"),
+    ]
+    for name, slug in vehicle_categories:
+        await db.categories.update_one(
+            {"product_id": product_id, "name": name},
+            {
+                "$setOnInsert": {
+                    "product_id": product_id,
+                    "name": name,
+                    "slug": slug,
+                    "status": "active",
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            },
+            upsert=True,
+        )
+
+    # --- features: the six "Smart tracking features" blocks ---------------------------------
+    features = [
+        {
+            "title": "Live vehicle locations",
+            "short_description": "REAL-TIME",
+            "long_description": (
+                "View live, accurate location data from AIS-140 compliant GPS devices "
+                "installed in your vehicles."
+            ),
+        },
+        {
+            "title": "Interactive map monitoring",
+            "short_description": "MAP TRACKING",
+            "long_description": "Monitor vehicle movement in real time on an interactive map view.",
+        },
+        {
+            "title": "Track multiple vehicles",
+            "short_description": "MULTI-VEHICLE",
+            "long_description": (
+                "Track several vehicles simultaneously from a single account and dashboard."
+            ),
+        },
+        {
+            "title": "Remote fleet monitoring",
+            "short_description": "FLEET",
+            "long_description": (
+                "Monitor fleet activity from anywhere — transport, logistics, delivery, or "
+                "public transport."
+            ),
+        },
+        {
+            "title": "EV vehicle monitoring",
+            "short_description": "EV READY",
+            "long_description": (
+                "Track electric vehicles alongside cars, trucks and buses in the same fleet "
+                "view."
+            ),
+        },
+        {
+            "title": "Secure monitoring platform",
+            "short_description": "SECURE",
+            "long_description": (
+                "Location data is encrypted and access to your vehicles is tied to your "
+                "account only."
+            ),
+        },
+    ]
+    for f in features:
+        await db.features.update_one(
+            {"product_id": product_id, "title": f["title"]},
+            {
+                "$setOnInsert": {
+                    "product_id": product_id,
+                    "status": "active",
+                    "created_at": now,
+                    "updated_at": now,
+                    **f,
+                }
+            },
+            upsert=True,
+        )
+
+    # --- services: the three "Reporting" bullets --------------------------------------------
+    reporting_intro = (
+        "Generate and download detailed PDF reports to keep records, support audits, and "
+        "analyse fleet performance."
+    )
+    services = [
+        {"title": "Vehicle trip reports"},
+        {"title": "Distance traveled reports"},
+        {"title": "Vehicle tracking reports in PDF format"},
+    ]
+    for s in services:
+        await db.services.update_one(
+            {"product_id": product_id, "title": s["title"]},
+            {
+                "$setOnInsert": {
+                    "product_id": product_id,
+                    "short_description": reporting_intro,
+                    "status": "active",
+                    "created_at": now,
+                    "updated_at": now,
+                    **s,
+                }
+            },
+            upsert=True,
+        )
+
+    # --- documents + document_chunks: the full Privacy Policy, section by section -----------
+    document_doc = await db.documents.find_one_and_update(
+        {"product_id": product_id, "title": "Track91 Privacy Policy"},
+        {
+            "$setOnInsert": {
+                "product_id": product_id,
+                "title": "Track91 Privacy Policy",
+                "document_type": "privacy_policy",
+                "source_type": "website_legal_page",
+                "status": "active",
+                "created_at": now,
+                "updated_at": now,
+            }
+        },
+        upsert=True,
+        return_document=True,
+    )
+    document_id = document_doc["_id"]
+
+    policy_sections = [
+        (
+            "Information we collect",
+            (
+                "This privacy policy applies to the Track91 mobile application. To provide "
+                "AIS-140 GPS tracking services, Track91 collects: the IMEI number of any "
+                "AIS-140 compliant GPS device you register; real-time and historical location "
+                "data reported by registered devices; vehicle status data such as speed and "
+                "ignition state; and basic account information, such as your name, email "
+                "address, and phone number."
+            ),
+        ),
+        (
+            "How we use this information",
+            (
+                "We use this data to display live vehicle locations, generate route history "
+                "and PDF reports, and manage your registered devices within the app."
+            ),
+        ),
+        (
+            "Data sharing",
+            (
+                "We do not sell your location or account data. Information is only shared "
+                "with trusted service providers — such as map and cloud infrastructure "
+                "providers — strictly to operate the app."
+            ),
+        ),
+        (
+            "Data security",
+            (
+                "Location and account data are encrypted in transit, and access to your data "
+                "is restricted to your account."
+            ),
+        ),
+        (
+            "Data retention",
+            (
+                "We retain tracking data for as long as your account remains active, or as "
+                "needed to provide route history and reports. You can request deletion of "
+                "your account and associated data at any time."
+            ),
+        ),
+        (
+            "Your consent",
+            (
+                "By registering a device and using Track91, you consent to the collection "
+                "and use of information as described in this policy."
+            ),
+        ),
+    ]
+    for chunk_index, (section, content) in enumerate(policy_sections):
+        await db.document_chunks.update_one(
+            {"document_id": document_id, "chunk_index": chunk_index},
+            {
+                "$setOnInsert": {
+                    "document_id": document_id,
+                    "product_id": product_id,
+                    "chunk_index": chunk_index,
+                    "content": content,
+                    "metadata": {"section": section},
+                    "created_at": now,
+                }
+            },
+            upsert=True,
+        )
+
+    logger.info("Track91 seed complete for org_id=%s, product_id=%s", org_id, product_id)
+
+
+async def seed_cosmica_test_fixture(db: AsyncIOMotorDatabase) -> None:
+    """Minimal synthetic fixture from the 2026-08-12 DBML redesign — exercises every
+    collection/index and backs loadtest/locustfile.py's demo login. Not real product data."""
+    now = _now()
+
+    org_id = (
+        await db.organizations.find_one_and_update(
+            {"organization_code": "COSMICA-TEST"},
+            {
+                "$setOnInsert": {
+                    # plan_id is required by the DBML but no `plans` collection exists to
+                    # reference — see schema_definitions.py's "Known gaps". A random ObjectId
+                    # placeholder, not a real reference, is used here only to satisfy the
+                    # `bsonType: objectId` validator.
+                    "plan_id": ObjectId(),
+                    "name": "Cosmica Test Org",
+                    "organization_code": "COSMICA-TEST",
+                    "industry": "Software",
+                    "organization_type": "customer",
+                    "contacts": {"primary_email": "ops@cosmica-test.example"},
+                    "address": {"city": "Pune", "country": "India"},
                     "timezone": "Asia/Kolkata",
+                    "currency": "INR",
+                    "status": "active",
                     "created_at": now,
                 }
             },
@@ -63,14 +397,14 @@ async def seed(db: AsyncIOMotorDatabase | None = None) -> None:
 
     users = [
         {"name": "Admin User", "email": "admin@cosmica-test.example", "role": "admin"},
-        {"name": "Fleet Manager", "email": "fleetmgr@cosmica-test.example", "role": "fleet_manager"},
+        {"name": "Product Manager", "email": "pm@cosmica-test.example", "role": "manager"},
     ]
     for u in users:
         await db.users.update_one(
-            {"company_id": company_id, "email": u["email"]},
+            {"org_id": org_id, "email": u["email"]},
             {
                 "$setOnInsert": {
-                    "company_id": company_id,
+                    "org_id": org_id,
                     "name": u["name"],
                     "email": u["email"],
                     "role": u["role"],
@@ -81,264 +415,158 @@ async def seed(db: AsyncIOMotorDatabase | None = None) -> None:
             },
             upsert=True,
         )
+    admin_user = await db.users.find_one({"org_id": org_id, "email": "admin@cosmica-test.example"})
 
-    drivers = [
-        {"name": "Ramesh Kumar", "phone": "+91-9800000001", "license_number": "MH-DL-0001"},
-        {"name": "Suresh Patil", "phone": "+91-9800000002", "license_number": "MH-DL-0002"},
-        {"name": "Anita Sharma", "phone": "+91-9800000003", "license_number": "KA-DL-0003"},
-    ]
-    driver_ids: dict[str, object] = {}
-    for d in drivers:
-        doc = await db.drivers.find_one_and_update(
-            {"company_id": company_id, "name": d["name"]},
-            {
-                "$setOnInsert": {
-                    "company_id": company_id,
-                    "name": d["name"],
-                    "phone": d["phone"],
-                    "license_number": d["license_number"],
-                    "status": "active",
-                    "created_at": now,
-                }
-            },
-            upsert=True,
-            return_document=True,
-        )
-        driver_ids[d["name"]] = doc["_id"]
-
-    vehicles = [
-        {
-            "plate_number": "MH12AB1234",
-            "nickname": "Pune Van",
-            "make": "Tata",
-            "model": "Ace",
-            "year": 2022,
-            "vehicle_type": "van",
-            "fleet_group": "Mumbai Fleet",
-            "device_id": "DEV-0001",
-            "assigned_driver": "Ramesh Kumar",
-        },
-        {
-            "plate_number": "MH14CD5678",
-            "nickname": "Mumbai Truck 1",
-            "make": "Ashok Leyland",
-            "model": "Dost",
-            "year": 2021,
-            "vehicle_type": "truck",
-            "fleet_group": "Mumbai Fleet",
-            "device_id": "DEV-0002",
-            "assigned_driver": "Suresh Patil",
-        },
-        {
-            "plate_number": "KA05EF9012",
-            "nickname": "Bangalore Van",
-            "make": "Mahindra",
-            "model": "Bolero Pickup",
-            "year": 2023,
-            "vehicle_type": "van",
-            "fleet_group": "Bangalore Fleet",
-            "device_id": "DEV-0003",
-            "assigned_driver": "Anita Sharma",
-        },
-        {
-            "plate_number": "DL01GH3456",
-            "nickname": "Delhi Spare",
-            "make": "Tata",
-            "model": "Ace",
-            "year": 2020,
-            "vehicle_type": "van",
-            "fleet_group": "Delhi Fleet",
-            "device_id": "DEV-0004",
-            "assigned_driver": None,
-        },
-    ]
-    vehicle_ids: dict[str, object] = {}
-    for v in vehicles:
-        insert_fields = {
-            "company_id": company_id,
-            "plate_number": v["plate_number"],
-            "nickname": v["nickname"],
-            "make": v["make"],
-            "model": v["model"],
-            "year": v["year"],
-            "vehicle_type": v["vehicle_type"],
-            "fleet_group": v["fleet_group"],
-            "device_id": v["device_id"],
-            "status": "active",
-            "created_at": now,
-        }
-        # Optional FK: omit entirely rather than write null — the schema requires
-        # assigned_driver_id to be an objectId *when present*, not nullable.
-        if v["assigned_driver"]:
-            insert_fields["assigned_driver_id"] = driver_ids[v["assigned_driver"]]
-
-        doc = await db.vehicles.find_one_and_update(
-            {"company_id": company_id, "plate_number": v["plate_number"]},
-            {
-                "$setOnInsert": {
-                    **insert_fields,
-                    "updated_at": now,
-                }
-            },
-            upsert=True,
-            return_document=True,
-        )
-        vehicle_ids[v["plate_number"]] = doc["_id"]
-
-    yesterday_start = SEED_ANCHOR
-    trips = [
-        {
-            "plate_number": "MH12AB1234",
-            "start_time": yesterday_start,
-            "end_time": yesterday_start + timedelta(hours=1, minutes=15),
-            "start_location": {"lat": 18.5204, "lng": 73.8567, "address": "Pune Warehouse"},
-            "end_location": {"lat": 18.6298, "lng": 73.7997, "address": "Pimpri, Pune"},
-            "distance_km": 24.5,
-            "duration_minutes": 75,
-            "stop_count": 1,
-            "avg_speed_kmph": 32.0,
-            "max_speed_kmph": 58.0,
-        },
-        {
-            "plate_number": "MH12AB1234",
-            "start_time": yesterday_start + timedelta(hours=3),
-            "end_time": yesterday_start + timedelta(hours=3, minutes=40),
-            "start_location": {"lat": 18.6298, "lng": 73.7997, "address": "Pimpri, Pune"},
-            "end_location": {"lat": 18.5204, "lng": 73.8567, "address": "Pune Warehouse"},
-            "distance_km": 22.1,
-            "duration_minutes": 40,
-            "stop_count": 0,
-            "avg_speed_kmph": 33.0,
-            "max_speed_kmph": 61.0,
-        },
-    ]
-    for t in trips:
-        plate = t.pop("plate_number")
-        vehicle_id = vehicle_ids[plate]
-        await db.trips.update_one(
-            {"company_id": company_id, "vehicle_id": vehicle_id, "start_time": t["start_time"]},
-            {"$setOnInsert": {"company_id": company_id, "vehicle_id": vehicle_id, "created_at": now, **t}},
-            upsert=True,
-        )
-
-    alerts = [
-        {
-            "plate_number": "MH12AB1234",
-            "alert_type": "speeding",
-            "severity": "medium",
-            "triggered_at": yesterday_start + timedelta(minutes=20),
-            "location": {"lat": 18.55, "lng": 73.83},
-            "details": "Recorded 78 km/h in a 60 km/h zone",
-        },
-        {
-            "plate_number": "MH14CD5678",
-            "alert_type": "low_fuel",
-            "severity": "low",
-            "triggered_at": SEED_ANCHOR + timedelta(hours=20),
-            "location": {"lat": 19.076, "lng": 72.877},
-            "details": "Fuel level dropped below 15%",
-        },
-    ]
-    for a in alerts:
-        plate = a.pop("plate_number")
-        vehicle_id = vehicle_ids[plate]
-        await db.alerts.update_one(
-            {"company_id": company_id, "vehicle_id": vehicle_id, "triggered_at": a["triggered_at"]},
-            {
-                "$setOnInsert": {
-                    "company_id": company_id,
-                    "vehicle_id": vehicle_id,
-                    "acknowledged": False,
-                    "created_at": now,
-                    **a,
-                }
-            },
-            upsert=True,
-        )
-
-    maintenance_records = [
-        {
-            "plate_number": "MH12AB1234",
-            "service_type": "oil_change",
-            "service_date": SEED_ANCHOR - timedelta(days=45),
-            "odometer_km": 18342.0,
-            "cost": 2200.0,
-            "notes": "Routine oil + filter change",
-            "next_due_date": SEED_ANCHOR + timedelta(days=45),
-            "next_due_odometer_km": 23000.0,
-        },
-        {
-            "plate_number": "KA05EF9012",
-            "service_type": "general_service",
-            "service_date": SEED_ANCHOR - timedelta(days=200),
-            "odometer_km": 9120.0,
-            "cost": 5400.0,
-            "notes": "General service, brake pads replaced",
-            "next_due_date": SEED_ANCHOR + timedelta(days=5),
-            "next_due_odometer_km": 15000.0,
-        },
-    ]
-    for m in maintenance_records:
-        plate = m.pop("plate_number")
-        vehicle_id = vehicle_ids[plate]
-        await db.maintenance_records.update_one(
-            {"company_id": company_id, "vehicle_id": vehicle_id, "service_date": m["service_date"]},
-            {"$setOnInsert": {"company_id": company_id, "vehicle_id": vehicle_id, "created_at": now, **m}},
-            upsert=True,
-        )
-
-    await db.geofences.update_one(
-        {"company_id": company_id, "name": "Mumbai Warehouse Zone"},
+    product_doc = await db.products.find_one_and_update(
+        {"org_id": org_id, "title": "Cosmica Test Product"},
         {
             "$setOnInsert": {
-                "company_id": company_id,
-                "name": "Mumbai Warehouse Zone",
-                "geometry": {
-                    "type": "Polygon",
-                    "coordinates": [
-                        [
-                            [72.870, 19.070],
-                            [72.885, 19.070],
-                            [72.885, 19.085],
-                            [72.870, 19.085],
-                            [72.870, 19.070],
-                        ]
-                    ],
-                },
-                "vehicle_ids": [vehicle_ids["MH12AB1234"], vehicle_ids["MH14CD5678"]],
-                "fleet_group": "Mumbai Fleet",
-                "active": True,
+                "org_id": org_id,
+                "content_type": "app",
+                "category": "productivity",
+                "title": "Cosmica Test Product",
+                "short_description": "A synthetic product used to exercise the schema.",
+                "items": [],
+                "keywords": ["test", "synthetic"],
+                "status": "active",
                 "created_at": now,
+                "updated_at": now,
+            }
+        },
+        upsert=True,
+        return_document=True,
+    )
+    product_id = product_doc["_id"]
+
+    category_doc = await db.categories.find_one_and_update(
+        {"product_id": product_id, "name": "Core"},
+        {
+            "$setOnInsert": {
+                "product_id": product_id,
+                "name": "Core",
+                "slug": "core",
+                "status": "active",
+                "created_at": now,
+                "updated_at": now,
+            }
+        },
+        upsert=True,
+        return_document=True,
+    )
+    category_id = category_doc["_id"]
+
+    features = [
+        {"title": "Dashboard", "short_description": "At-a-glance overview."},
+        {"title": "Notifications", "short_description": "Configurable alert delivery."},
+    ]
+    for f in features:
+        await db.features.update_one(
+            {"product_id": product_id, "title": f["title"]},
+            {
+                "$setOnInsert": {
+                    "product_id": product_id,
+                    "category_id": category_id,
+                    "status": "active",
+                    "created_at": now,
+                    "updated_at": now,
+                    **f,
+                }
+            },
+            upsert=True,
+        )
+
+    services = [
+        {"title": "Onboarding", "short_description": "Guided setup for new organizations."},
+    ]
+    for s in services:
+        await db.services.update_one(
+            {"product_id": product_id, "title": s["title"]},
+            {
+                "$setOnInsert": {
+                    "product_id": product_id,
+                    "category_id": category_id,
+                    "status": "active",
+                    "created_at": now,
+                    "updated_at": now,
+                    **s,
+                }
+            },
+            upsert=True,
+        )
+
+    await db.prompt_configurations.update_one(
+        {"product_id": product_id, "name": "default"},
+        {
+            "$setOnInsert": {
+                "product_id": product_id,
+                "name": "default",
+                "system_prompt": "You are a helpful assistant for Cosmica Test Product.",
+                "model_provider": "bedrock",
+                "model_name": "anthropic.claude-3-haiku",
+                "temperature": 0.2,
+                "max_tokens": 1024,
+                "is_active": True,
+                "created_at": now,
+                "updated_at": now,
             }
         },
         upsert=True,
     )
 
-    admin_user = await db.users.find_one({"company_id": company_id, "email": "admin@cosmica-test.example"})
-    session_doc = await db.chat_sessions.find_one_and_update(
-        {"company_id": company_id, "user_id": admin_user["_id"], "status": "active"},
+    documents = [
+        {"title": "Product FAQ", "document_type": "faq", "source_type": "app_faq"},
+        {"title": "Getting Started Guide", "document_type": "guide", "source_type": "feature_guide"},
+    ]
+    for doc in documents:
+        await db.documents.update_one(
+            {"product_id": product_id, "title": doc["title"]},
+            {
+                "$setOnInsert": {
+                    "product_id": product_id,
+                    "status": "active",
+                    "created_at": now,
+                    "updated_at": now,
+                    **doc,
+                }
+            },
+            upsert=True,
+        )
+
+    await db.knowledge_items.update_one(
+        {"product_id": product_id, "title": "Supported Browsers"},
         {
             "$setOnInsert": {
-                "company_id": company_id,
+                "product_id": product_id,
+                "content_type": "faq_item",
+                "title": "Supported Browsers",
+                "short_description": "Chrome, Firefox, Safari, Edge (latest two major versions).",
+                "keywords": ["browser", "compatibility"],
+                "status": "active",
+                "created_at": now,
+                "updated_at": now,
+            }
+        },
+        upsert=True,
+    )
+
+    session_doc = await db.chat_sessions.find_one_and_update(
+        {"product_id": product_id, "user_id": admin_user["_id"], "status": "active"},
+        {
+            "$setOnInsert": {
+                "product_id": product_id,
                 "user_id": admin_user["_id"],
+                "session_key": f"seed-session-{admin_user['_id']}",
                 "status": "active",
                 "started_at": now,
                 "last_active_at": now,
-                "active_entities": {"vehicle_id": vehicle_ids["MH12AB1234"]},
             }
         },
         upsert=True,
         return_document=True,
     )
     sample_messages = [
-        {"role": "user", "content": "Where is MH12AB1234 right now?", "intent": "GET_VEHICLE_LOCATION"},
-        {
-            "role": "assistant",
-            "content": "MH12AB1234 is currently near Pimpri, Pune.",
-            # no "intent" key — assistant turns aren't classified, and the schema requires
-            # intent to be a string *when present* rather than accepting null.
-        },
-        {"role": "user", "content": "What's its speed?", "intent": "GET_VEHICLE_SPEED"},
+        {"role": "user", "content": "What browsers are supported?"},
+        {"role": "assistant", "content": "Chrome, Firefox, Safari, and Edge — latest two major versions."},
     ]
     for i, m in enumerate(sample_messages):
         await db.chat_messages.update_one(
@@ -346,7 +574,6 @@ async def seed(db: AsyncIOMotorDatabase | None = None) -> None:
             {
                 "$setOnInsert": {
                     "session_id": session_doc["_id"],
-                    "company_id": company_id,
                     "created_at": now + timedelta(seconds=i),
                     **m,
                 }
@@ -354,58 +581,7 @@ async def seed(db: AsyncIOMotorDatabase | None = None) -> None:
             upsert=True,
         )
 
-    documents = [
-        {
-            "title": "Geofencing Feature Guide",
-            "source_type": "feature_guide",
-            "version": "v1",
-            "approved_pricing": False,
-        },
-        {
-            "title": "Track91 App FAQ",
-            "source_type": "app_faq",
-            "version": "v1",
-            "approved_pricing": False,
-        },
-        {
-            "title": "GPS Device Offline Troubleshooting",
-            "source_type": "troubleshooting",
-            "version": "v1",
-            "approved_pricing": False,
-        },
-        {
-            "title": "Data Retention Policy",
-            "source_type": "policy",
-            "version": "v1",
-            "approved_pricing": False,
-        },
-        {
-            "title": "Track91 Pricing Sheet",
-            "source_type": "pricing",
-            "version": "v3-approved",
-            "approved_pricing": True,
-        },
-        {
-            "title": "Draft Enterprise Pricing Notes",
-            "source_type": "pricing",
-            "version": "draft-2026-06",
-            "approved_pricing": False,
-        },
-    ]
-    for doc in documents:
-        await db.documents_meta.update_one(
-            {"title": doc["title"], "version": doc["version"]},
-            {
-                "$setOnInsert": {
-                    "is_active": True,
-                    "ingested_at": now,
-                    **doc,
-                }
-            },
-            upsert=True,
-        )
-
-    logger.info("Seed complete for company_id=%s", company_id)
+    logger.info("Cosmica test fixture seed complete for org_id=%s, product_id=%s", org_id, product_id)
 
 
 if __name__ == "__main__":

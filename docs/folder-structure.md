@@ -157,9 +157,8 @@ Routers only parse input, call a service, and shape the response — no business
 |---|---|
 | `base.py` | The `LLMProvider` interface every provider implements |
 | `factory.py` | `get_llm_provider()` — reads `LLM_PROVIDER` from config and builds the matching provider; never raises, falls back to `UnavailableLLMProvider` if misconfigured |
-| `providers/openai_compatible.py` | Shared HTTP request/response logic for any OpenAI-compatible chat-completions API |
-| `providers/deepseek.py` | DeepSeek adapter (paid, roadmap default) |
-| `providers/groq.py` | Groq adapter (free-tier) — what this project actually runs against |
+| `providers/bedrock.py` | AWS Bedrock adapter (gpt-oss-120b) — what this project actually runs against. Credentials via boto3's default chain, never `.env` |
+| `providers/usage.py` | Shared parsing for the OpenAI-compatible `choices`/`usage` response shape (Bedrock's gpt-oss returns this shape over a non-HTTP transport) |
 | `providers/unavailable.py` | Graceful-degradation fallback when no real provider is configured |
 | `providers/fake.py` | Deterministic test double — used throughout the test suite, never at runtime |
 

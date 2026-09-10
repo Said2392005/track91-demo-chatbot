@@ -65,6 +65,12 @@ INTENT_SPECS: dict[str, IntentSpec] = {
     "GREETING": IntentSpec(NONE_SUBSYSTEM),
     "GOODBYE": IntentSpec(NONE_SUBSYSTEM),
     "CHITCHAT": IntentSpec(NONE_SUBSYSTEM),
+    # Added after real testing: "is Track91 a GPS app?" / "what is Track91" / "what does your
+    # company do" were previously left to refuse (OUT_OF_SCOPE) or, worse, fall through to
+    # GENERAL_KNOWLEDGE's generic "GPS apps in general" answer — confusingly unhelpful for a
+    # question specifically about this product. See docs/phase-1-planning/intent-taxonomy.md's
+    # note on this reversal.
+    "ABOUT_TRACK91": IntentSpec(NONE_SUBSYSTEM),
     "CLARIFICATION_NEEDED": IntentSpec(NONE_SUBSYSTEM),
     "AFFIRM_DENY": IntentSpec(NONE_SUBSYSTEM),
     "OUT_OF_SCOPE": IntentSpec(NONE_SUBSYSTEM),

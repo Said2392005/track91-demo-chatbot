@@ -36,25 +36,46 @@ class GoldenCase:
 
 
 GOLDEN_SET: list[GoldenCase] = [
-    # --- A. LIVE_API (6) ---
+    # --- A. LIVE_API (7) ---
     GoldenCase("live_location", "Where is MH12AB1234 right now?", "GET_VEHICLE_LOCATION", expected_entities={"vehicle_id": "plate:MH12AB1234"}),
     GoldenCase("live_speed", "How fast is MH12AB1234 going?", "GET_VEHICLE_SPEED", expected_entities={"vehicle_id": "plate:MH12AB1234"}),
     GoldenCase("live_fuel", "What's the fuel level on MH12AB1234?", "GET_VEHICLE_FUEL_LEVEL", expected_entities={"vehicle_id": "plate:MH12AB1234"}),
     GoldenCase("live_health", "Any engine warnings on MH12AB1234?", "GET_VEHICLE_HEALTH", expected_entities={"vehicle_id": "plate:MH12AB1234"}),
     GoldenCase("live_ignition", "Is MH12AB1234 on or off right now?", "GET_VEHICLE_IGNITION_STATUS", expected_entities={"vehicle_id": "plate:MH12AB1234"}),
     GoldenCase("live_fleet_status", "How many vehicles are moving right now?", "GET_FLEET_LIVE_STATUS"),
-    # --- B. MONGO_REPO (11) ---
+    # Added via the all-intent systematic trigger-coverage probe pass (see
+    # docs/phase-6-semantic-analysis/known-gaps.md) — end-to-end proof that a bare-keyword
+    # phrasing resolves through the full pipeline (classify + entity extraction + routing), not
+    # just at the classifier level (already covered separately in test_intent_classifier.py).
+    GoldenCase("bare_fleet_status", "fleet status", "GET_FLEET_LIVE_STATUS", notes="bare-keyword regression case for the all-intent trigger-coverage pass"),
+    # --- B. MONGO_REPO (14) ---
     GoldenCase("trip_history_vehicle", "Show me MH12AB1234's trip history yesterday", "GET_TRIP_HISTORY", expected_entities={"vehicle_id": "plate:MH12AB1234", "date_range": "PRESENT"}),
     GoldenCase("trip_history_driver", "Show trips for Ramesh Kumar yesterday", "GET_TRIP_HISTORY", expected_entities={"driver_id": "driver:Ramesh Kumar", "date_range": "PRESENT"}),
     GoldenCase("trip_summary", "How many km did MH12AB1234 cover last week?", "GET_TRIP_SUMMARY", expected_entities={"date_range": "PRESENT"}),
     GoldenCase("alert_history", "Any alerts for MH12AB1234 this month?", "GET_ALERT_HISTORY", expected_entities={"date_range": "PRESENT"}),
+    GoldenCase(
+        "bare_alert_history",
+        "alerts",
+        "GET_ALERT_HISTORY",
+        expected_final_intent="CLARIFICATION_NEEDED",
+        notes=(
+            "bare-keyword regression case for the all-intent trigger-coverage pass — raw_intent "
+            "correctly resolves from the bare keyword alone; final_intent still correctly "
+            "downgrades to CLARIFICATION_NEEDED since date_range (required) isn't in a single "
+            "bare noun, same as the pre-existing clarification_missing_date case below"
+        ),
+    ),
     GoldenCase("maintenance_history", "When was MH12AB1234 last serviced?", "GET_MAINTENANCE_HISTORY", expected_entities={"vehicle_id": "plate:MH12AB1234"}),
     GoldenCase("maintenance_due", "Which vehicles are due for service?", "GET_MAINTENANCE_DUE"),
     GoldenCase("driver_behavior", "What's Ramesh Kumar's driving score this month?", "GET_DRIVER_BEHAVIOR_REPORT", expected_entities={"driver_id": "driver:Ramesh Kumar", "date_range": "PRESENT"}),
     GoldenCase("fuel_report", "Fuel efficiency report for last month", "GET_FUEL_CONSUMPTION_REPORT", expected_entities={"date_range": "PRESENT"}),
     GoldenCase("geofence_list", "What geofences apply to MH12AB1234?", "GET_GEOFENCE_LIST"),
+    GoldenCase("bare_geofence_list", "geofences", "GET_GEOFENCE_LIST", notes="bare-keyword regression case for the all-intent trigger-coverage pass"),
     GoldenCase("vehicle_roster", "List all my vehicles", "GET_VEHICLE_ROSTER"),
+    GoldenCase("bare_vehicle_roster", "vehicles", "GET_VEHICLE_ROSTER", notes="bare-keyword regression case for the all-intent trigger-coverage pass — the one deliberately-decided ambiguous-adjacent case, see known-gaps.md"),
     GoldenCase("driver_roster", "List all drivers", "GET_DRIVER_ROSTER"),
+    # The motivating gap for this whole pass — see the conversation history / known-gaps.md.
+    GoldenCase("bare_driver_roster", "drivers", "GET_DRIVER_ROSTER", notes="bare-keyword regression case for the all-intent trigger-coverage pass"),
     # --- C. Backlog (4) — intent classification only; router rejects these (Phase 9) ---
     # CREATE_GEOFENCE and SCHEDULE_MAINTENANCE's final_intent legitimately downgrades to
     # CLARIFICATION_NEEDED, not a bug: entity_extractor.py never implements free-text
@@ -117,10 +138,16 @@ GOLDEN_SET: list[GoldenCase] = [
     ),
     GoldenCase("general_knowledge_1", "What does AIS-140 mean?", "GENERAL_KNOWLEDGE", notes="never backed by the KB by design — intent-only"),
     GoldenCase("general_knowledge_2", "How does GPS triangulation work?", "GENERAL_KNOWLEDGE", notes="never backed by the KB by design — intent-only"),
-    # --- E. Meta (8) ---
+    # --- E. Meta (9) ---
     GoldenCase("greeting", "Hi there", "GREETING"),
     GoldenCase("goodbye", "Thanks, bye", "GOODBYE"),
     GoldenCase("chitchat", "What can you do?", "CHITCHAT"),
+    GoldenCase(
+        "about_track91",
+        "Is Track91 a GPS app?",
+        "ABOUT_TRACK91",
+        notes="added after real testing showed this fell to OUT_OF_SCOPE, or worse GENERAL_KNOWLEDGE's generic GPS-apps answer",
+    ),
     GoldenCase("out_of_scope", "Write me a poem", "OUT_OF_SCOPE"),
     GoldenCase(
         "clarification_pronoun_no_context",
@@ -138,6 +165,34 @@ GOLDEN_SET: list[GoldenCase] = [
         session_state={},
         notes="no vehicle/driver and no date_range at all",
     ),
-    GoldenCase("affirm_deny_yes", "Yes", "AFFIRM_DENY", session_state={"awaiting_clarification": True}),
-    GoldenCase("affirm_deny_no", "No, the other one", "AFFIRM_DENY", session_state={"awaiting_clarification": True}),
+    # session_state needs BOTH keys — found stale while investigating an unrelated token-usage
+    # change. app/eval/runner.py's _run_case() exercises the classifier two different ways:
+    # raw_intent via a direct classifier.classify(utterance, case.session_state) call (reads
+    # the literal "awaiting_clarification" key), and final_intent via
+    # app.nlu.pipeline.analyze(), which now derives its OWN "awaiting_clarification" from
+    # "pending_clarification" (added for the pending-clarification-resume feature) and
+    # overrides whatever raw flag was passed. A session_state with only one of the two keys
+    # satisfies exactly one of runner.py's two call paths and silently fails the other — not a
+    # real product bug (production only ever reaches analyze() through
+    # app/agent/nodes.py's semantic_analysis_node, which already passes pending_clarification,
+    # never a raw flag directly), just a test fixture that predated the feature it's now
+    # inconsistent with.
+    GoldenCase(
+        "affirm_deny_yes",
+        "Yes",
+        "AFFIRM_DENY",
+        session_state={
+            "awaiting_clarification": True,
+            "pending_clarification": {"intent": "GET_VEHICLE_LOCATION", "missing": "vehicle_ref"},
+        },
+    ),
+    GoldenCase(
+        "affirm_deny_no",
+        "No, the other one",
+        "AFFIRM_DENY",
+        session_state={
+            "awaiting_clarification": True,
+            "pending_clarification": {"intent": "GET_VEHICLE_LOCATION", "missing": "vehicle_ref"},
+        },
+    ),
 ]

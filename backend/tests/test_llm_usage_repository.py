@@ -10,8 +10,8 @@ async def test_record_then_summarize(db):
     company_id, user_id, session_id = ObjectId(), ObjectId(), ObjectId()
     now = datetime.now(timezone.utc)
 
-    await repo.record(company_id, user_id, session_id, "groq", "llama-3.3-70b-versatile", "response_synthesis", 100, 20, now)
-    await repo.record(company_id, user_id, session_id, "groq", "llama-3.3-70b-versatile", "rag_generation", 50, 10, now)
+    await repo.record(company_id, user_id, session_id, "bedrock", "openai.gpt-oss-120b-1:0", "response_synthesis", 100, 20, now)
+    await repo.record(company_id, user_id, session_id, "bedrock", "openai.gpt-oss-120b-1:0", "rag_generation", 50, 10, now)
 
     summary = await repo.summarize(company_id, now - timedelta(minutes=1), now + timedelta(minutes=1))
     assert summary["call_count"] == 2
@@ -26,7 +26,7 @@ async def test_summarize_counts_but_does_not_estimate_calls_with_no_usage_data(d
     now = datetime.now(timezone.utc)
 
     await repo.record(company_id, user_id, session_id, "ollama", "llama3", "response_synthesis", None, None, now)
-    await repo.record(company_id, user_id, session_id, "groq", "llama-3.3-70b-versatile", "rag_generation", 50, 10, now)
+    await repo.record(company_id, user_id, session_id, "bedrock", "openai.gpt-oss-120b-1:0", "rag_generation", 50, 10, now)
 
     summary = await repo.summarize(company_id, now - timedelta(minutes=1), now + timedelta(minutes=1))
     assert summary["call_count"] == 2
@@ -40,8 +40,8 @@ async def test_summarize_excludes_calls_outside_the_time_window(db):
     company_id, user_id, session_id = ObjectId(), ObjectId(), ObjectId()
     now = datetime.now(timezone.utc)
 
-    await repo.record(company_id, user_id, session_id, "groq", "llama-3.3-70b-versatile", "response_synthesis", 100, 20, now - timedelta(days=2))
-    await repo.record(company_id, user_id, session_id, "groq", "llama-3.3-70b-versatile", "response_synthesis", 5, 5, now)
+    await repo.record(company_id, user_id, session_id, "bedrock", "openai.gpt-oss-120b-1:0", "response_synthesis", 100, 20, now - timedelta(days=2))
+    await repo.record(company_id, user_id, session_id, "bedrock", "openai.gpt-oss-120b-1:0", "response_synthesis", 5, 5, now)
 
     summary = await repo.summarize(company_id, now - timedelta(hours=1), now + timedelta(hours=1))
     assert summary["call_count"] == 1
@@ -54,8 +54,8 @@ async def test_summarize_scoped_to_company(db):
     user_id, session_id = ObjectId(), ObjectId()
     now = datetime.now(timezone.utc)
 
-    await repo.record(company_a, user_id, session_id, "groq", "llama-3.3-70b-versatile", "response_synthesis", 100, 20, now)
-    await repo.record(company_b, user_id, session_id, "groq", "llama-3.3-70b-versatile", "response_synthesis", 999, 999, now)
+    await repo.record(company_a, user_id, session_id, "bedrock", "openai.gpt-oss-120b-1:0", "response_synthesis", 100, 20, now)
+    await repo.record(company_b, user_id, session_id, "bedrock", "openai.gpt-oss-120b-1:0", "response_synthesis", 999, 999, now)
 
     summary = await repo.summarize(company_a, now - timedelta(minutes=1), now + timedelta(minutes=1))
     assert summary["call_count"] == 1

@@ -12,6 +12,7 @@ import re
 from abc import ABC, abstractmethod
 from functools import lru_cache
 
+from app.core.config import settings
 from app.core.taxonomy import ALL_INTENTS
 from app.llm.base import LLMProvider, Message
 from app.nlu.trigger_patterns import (
@@ -55,6 +56,15 @@ def _score(utterance_lower: str, intent: str) -> int:
         ):
             score += 4
     return score
+
+
+def score_all_intents(utterance: str) -> dict[str, int]:
+    """Every intent's raw trigger score for this utterance, keyed by intent name — the same
+    scoring RuleBasedIntentClassifier.classify() uses internally to pick its single winner,
+    exposed for callers that need to look beyond just the top score (app/nlu/second_intent.py's
+    dual-intent detector — see its module docstring for why)."""
+    lowered = utterance.strip().lower()
+    return {intent: _score(lowered, intent) for intent in _PRIORITY_ORDER}
 
 
 class RuleBasedIntentClassifier(IntentClassifier):
@@ -106,6 +116,7 @@ class LLMIntentClassifier(IntentClassifier):
                 Message(role="user", content=utterance),
             ],
             call_type="intent_classification",
+            max_tokens=settings.llm_max_tokens,
         )
         label = response.content.strip().strip('"').strip()
         # Tolerate a JSON-wrapped reply (e.g. {"intent": "GET_VEHICLE_SPEED"}) without requiring it.
@@ -125,8 +136,6 @@ def get_intent_classifier(llm: LLMProvider | None = None) -> IntentClassifier:
     — app/main.py passes the usage-tracking-wrapped provider here so LLM-strategy
     classification is tracked identically to every other real LLM call, instead of silently
     picking up the unwrapped cached singleton on its own."""
-    from app.core.config import settings
-
     if settings.intent_classifier_strategy == "llm":
         if llm is None:
             from app.llm.factory import get_llm_provider

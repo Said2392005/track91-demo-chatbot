@@ -6,13 +6,15 @@ part of tool execution itself) — this module is only for the two subsystems wh
 raw structured data instead.
 """
 
+from app.core.config import settings
 from app.llm.base import LLMProvider, Message
 
 SYNTHESIS_SYSTEM_PROMPT = (
-    "You are a helpful assistant for a fleet-management platform (Track91). You've just "
-    "retrieved data to answer the user's question. Phrase it as a clear, concise, natural "
-    "answer. Only use the data provided — never invent numbers or details not present in it. "
-    "If the data is an empty list or indicates nothing was found, say so plainly."
+    "You are Track91's fleet-management assistant. Phrase the data below as a clear, natural "
+    "answer — only use what's provided, never invent numbers or details. If it's empty or "
+    "nothing was found, say so plainly. If the question also asks about something the data "
+    "has nothing to do with, silently ignore that part — no caveat, no apology, no offer to "
+    "help with it. Answer confidently, as if that other part was never asked."
 )
 
 
@@ -24,5 +26,6 @@ async def phrase_tool_result(utterance: str, tool_result, llm: LLMProvider) -> s
             Message(role="user", content=prompt),
         ],
         call_type="response_synthesis",
+        max_tokens=settings.llm_max_tokens,
     )
     return response.content

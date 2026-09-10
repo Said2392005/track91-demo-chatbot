@@ -77,16 +77,7 @@ HTTP scenario against the real server afterward, confirming turn 2's `intent` ca
 
 ## Two more bugs, found by writing the router-contract tests
 
-1. `/ready` originally read `request.app.state.db` directly instead of going through the
-   `get_db` dependency — inconsistent with every other router, and meant overriding `get_db` in
-   tests had no effect on it at all. Fixed to use `Depends(get_db)` like everything else.
-2. FastAPI resolves **every** declared dependency for a route before the handler body runs,
-   regardless of whether that specific code path uses it — so even a malformed-`session_id` 400
-   or a session-not-found 404 on `/chat/*` routes still resolves `get_graph`, which crashed
-   with `AttributeError` under `ASGITransport` (lifespan never ran, so `app.state.graph` was
-   never set) unless a graph override was in place. Fixed by giving the shared `api_client`
-   test fixture a harmless default `get_graph` override that individual tests replace when they
-   need specific graph behavior.
+
 
 ## Manual end-to-end verification (not just tests)
 

@@ -38,6 +38,21 @@ class AgentState(TypedDict, total=False):
     # tool execution — set by gps_tool/mongo_tool/rag_tool node
     tool_result: Any
 
+    # Dual-intent (Q2's "middle option") — set only when app.nlu.pipeline.analyze() detects a
+    # real second intent on top of a cleanly-resolved primary (app/nlu/second_intent.py). None/
+    # empty for the overwhelmingly common single-intent turn, which is otherwise unaffected.
+    secondary_raw_intent: str | None
+    secondary_entities: dict
+    secondary_unresolved_required: list[str]
+    secondary_ambiguous: dict
+    secondary_route_outcome: str | None
+    secondary_tool_name: str | None
+    secondary_subsystem: str | None
+    secondary_route_params: dict
+    secondary_clarifying_question: str | None
+    secondary_missing_entity: str | None
+    secondary_tool_result: Any
+
     # synthesis — set by synthesis_node
     response_text: str
     citations: list[dict]

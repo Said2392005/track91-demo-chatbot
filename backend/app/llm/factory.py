@@ -1,25 +1,25 @@
 import logging
 from functools import lru_cache
 
+from botocore.exceptions import BotoCoreError
+
 from app.core.config import settings
 from app.llm.base import LLMProvider
 
 logger = logging.getLogger(__name__)
 
 
-def _build_deepseek() -> LLMProvider:
-    from app.llm.providers.deepseek import DeepSeekProvider
+def _build_bedrock() -> LLMProvider:
+    from app.llm.providers.bedrock import BedrockProvider
 
-    return DeepSeekProvider(api_key=settings.deepseek_api_key)
-
-
-def _build_groq() -> LLMProvider:
-    from app.llm.providers.groq import GroqProvider
-
-    return GroqProvider(api_key=settings.groq_api_key)
+    return BedrockProvider(
+        model_id=settings.bedrock_model_id,
+        region=settings.bedrock_region,
+        profile=settings.aws_profile,
+    )
 
 
-_BUILDERS = {"deepseek": _build_deepseek, "groq": _build_groq}
+_BUILDERS = {"bedrock": _build_bedrock}
 
 
 @lru_cache
@@ -36,6 +36,12 @@ def get_llm_provider() -> LLMProvider:
 
     try:
         return builder()
-    except ValueError as e:
+    except (ValueError, BotoCoreError) as e:
+        # BotoCoreError alongside ValueError: boto3.Session(profile_name=...) (bedrock.py)
+        # raises botocore.exceptions.ProfileNotFound immediately at construction — eagerly,
+        # unlike the old boto3.client() call it replaced, which deferred all credential errors
+        # to the first real API call. A misspelled/missing aws_profile must degrade to
+        # UnavailableLLMProvider the same way a missing API key always has here, not crash app
+        # startup entirely — found by actually triggering this path, not by inspection.
         logger.warning("LLM provider unavailable (%s) — falling back to UnavailableLLMProvider", e)
         return UnavailableLLMProvider(str(e))

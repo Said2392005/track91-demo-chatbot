@@ -24,9 +24,13 @@ def build_graph(*, classifier, db, llm, gps_client, kb_collection, session_repo,
     graph.add_node("semantic_analysis", nodes.make_semantic_analysis_node(classifier, db))
     graph.add_node("router", nodes.make_router_node())
     graph.add_node("clarify", nodes.make_clarify_node(session_repo))
-    graph.add_node("gps_tool", nodes.make_gps_tool_node(gps_client))
-    graph.add_node("mongo_tool", nodes.make_mongo_tool_node(db))
-    graph.add_node("rag_tool", nodes.make_rag_tool_node(llm, kb_collection))
+    # Each tool node factory now receives ALL FOUR deps, not just the one its own primary
+    # subsystem needs — dual-intent handling (app/agent/nodes.py's _execute_secondary_tool)
+    # means whichever primary node runs may also need to execute a SECONDARY tool from a
+    # different subsystem (e.g. a MONGO_REPO primary + a LIVE_API secondary).
+    graph.add_node("gps_tool", nodes.make_gps_tool_node(gps_client, db=db, llm=llm, kb_collection=kb_collection))
+    graph.add_node("mongo_tool", nodes.make_mongo_tool_node(db, gps_client=gps_client, llm=llm, kb_collection=kb_collection))
+    graph.add_node("rag_tool", nodes.make_rag_tool_node(llm, kb_collection, db=db, gps_client=gps_client))
     graph.add_node("synthesis", nodes.make_synthesis_node(llm))
     graph.add_node("memory_update", nodes.make_memory_update_node(session_repo))
 

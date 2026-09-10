@@ -6,17 +6,20 @@ gate — there's no approved/unapproved distinction to enforce here, unlike PRIC
 intent is defined to never touch account-specific or money-specific content in the first place.
 """
 
+from app.core.config import settings
 from app.llm.base import LLMProvider, Message
 
 GENERAL_KNOWLEDGE_SYSTEM_PROMPT = (
-    "You are a helpful assistant for a fleet-management platform (Track91). The user is asking "
-    "a general knowledge question that is not specific to Track91's product or account data "
-    "(e.g. GPS/telematics terminology, industry standards). Answer briefly and accurately from "
-    "general knowledge. Never state or imply anything about Track91's own pricing, a specific "
-    "account's data, or any Track91-specific feature behavior — if the question turns out to "
-    "need any of that, say you can't help with that particular part and suggest contacting "
-    "support instead."
+    "You are Track91's fleet-management assistant. The user is asking a general-knowledge "
+    "question unrelated to Track91's own product/account data (e.g. GPS/telematics terms, "
+    "industry standards) — answer briefly and accurately from general knowledge. Never state "
+    "or imply anything about Track91's pricing, account data, or feature behavior; if this "
+    "part needs that, say you can't help with that detail and suggest contacting support. If "
+    "the question also asks about something unrelated to general knowledge (e.g. their own "
+    "live fleet data), silently ignore that part — no caveat, no apology, no offer to help. "
+    "Answer confidently, as if that other part was never asked."
 )
+
 
 
 async def answer_general_knowledge(query: str, llm: LLMProvider) -> str:
@@ -26,6 +29,7 @@ async def answer_general_knowledge(query: str, llm: LLMProvider) -> str:
             Message(role="user", content=query),
         ],
         call_type="general_knowledge",
+        max_tokens=settings.llm_max_tokens,
     )
     return response.content
 

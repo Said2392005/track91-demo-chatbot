@@ -13,6 +13,9 @@ _META_RESPONSES = {
         "I'm focused on helping with your Track91 fleet — I can't help with that, but I'm "
         "happy to help with vehicles, trips, alerts, maintenance, or your account."
     ),
+    # Fixed, not LLM-generated, deliberately — same reasoning as every other template here:
+    # short and stable beats a fresh LLM paraphrase for a question with one correct answer.
+    "ABOUT_TRACK91": "Track91 is a GPS fleet management platform for tracking vehicles, drivers, trips, and alerts.",
     # AFFIRM_DENY on its own, without the multi-turn disambiguation flow (tracking which
     # candidate a prior CLARIFICATION_NEEDED turn offered) to resolve against, has nothing
     # concrete to confirm/deny yet — that flow is not built in this phase. Flagged limitation,

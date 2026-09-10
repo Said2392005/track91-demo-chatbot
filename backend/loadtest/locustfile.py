@@ -6,11 +6,11 @@ Load test — Phase 12 requirement. Run with:
 Targets a real running instance of the FastAPI app (`uvicorn app.main:app`) — seed data must
 already exist (`python -m app.db.seed_data`) since login uses the demo credentials it creates.
 
-Without a configured LLM provider (this environment), every message that needs real generation
-returns the degraded LLM_UNAVAILABLE_RESPONSE quickly rather than waiting on a real model call —
-so numbers from a run here measure this stack's own overhead (routing, Mongo, Chroma retrieval,
-auth, logging), not real DeepSeek call latency. Re-run once a key is configured for numbers that
-include real generation latency; see docs/phase-12-testing/testing.md.
+Without a configured LLM provider, every message that needs real generation returns the
+degraded LLM_UNAVAILABLE_RESPONSE quickly rather than waiting on a real model call — so numbers
+from a run here measure this stack's own overhead (routing, Mongo, Chroma retrieval, auth,
+logging), not real Bedrock call latency. Re-run once AWS credentials are configured for numbers
+that include real generation latency; see docs/phase-12-testing/testing.md.
 """
 
 import random

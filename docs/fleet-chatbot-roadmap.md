@@ -3,6 +3,7 @@
 This is the reference copy of the approved roadmap and design rules. Every phase should be
 checked against this file before starting and before merging.
 
+
 ## Environment assumptions (confirmed at Phase 1 kickoff)
 
 - **Fleet GPS API**: not yet available. Build a mock provider behind the same interface the
@@ -12,6 +13,7 @@ checked against this file before starting and before merging.
   such.
 - **Scale target**: small pilot, <50 concurrent users. Optimize for correctness and clean
   layering over throughput; no sharding/caching architecture required yet.
+
 
 ## Phase order (do not skip or merge)
 
@@ -29,6 +31,7 @@ checked against this file before starting and before merging.
 12. Testing — unit, integration, API, load test, AI eval golden-set harness
 13. Deployment — Dockerfiles, docker-compose, CI/CD, env config, docs
 
+
 ## Tech stack (fixed)
 
 - Backend: Python, FastAPI
@@ -39,6 +42,7 @@ checked against this file before starting and before merging.
 - LLM: swappable behind one provider-agnostic interface; default to a cheap model
   (DeepSeek / Gemini Flash-Lite) for dev
 - Deployment: Docker Compose locally; no AWS-specific code until Phase 13+
+
 
 ## Non-negotiable design rules
 
@@ -57,6 +61,7 @@ checked against this file before starting and before merging.
 - Routers stay thin: parse request → call service → return response.
 - Structured (JSON) logging with `session_id`/`request_id` correlation from Phase 11 onward.
 
+
 ## Per-phase testing expectations
 
 | Phase | Tests required |
@@ -71,6 +76,7 @@ checked against this file before starting and before merging.
 | 11 | Contract tests per router, DI override tests |
 | 12 | Full pyramid + load test + AI eval harness (40-60 Q&A golden set: intent accuracy, entity accuracy, retrieval precision, answer faithfulness) |
 | 13 | CI pipeline runs the above on every PR |
+
 
 ## End-of-phase checklist
 

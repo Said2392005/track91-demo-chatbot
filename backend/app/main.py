@@ -23,6 +23,7 @@ from app.db.repositories.llm_usage_repository import LLMUsageRepository
 from app.db.repositories.session_repository import SessionRepository
 from app.kb.chroma_client import get_kb_collection
 from app.llm.factory import get_llm_provider
+from app.llm.providers.bedrock import BedrockProvider
 from app.llm.usage_tracking import TrackingLLMProvider
 from app.memory.checkpointer import get_checkpointer
 from app.nlu.intent_classifier import get_intent_classifier
@@ -41,7 +42,28 @@ async def lifespan(app: FastAPI):
     # no db to hand a repository to) — passed into both get_intent_classifier() and
     # build_graph() so intent classification (when LLM_PROVIDER strategy is "llm") and every
     # other real LLM call are tracked through the identical wrapper instance.
-    tracked_llm = TrackingLLMProvider(get_llm_provider(), LLMUsageRepository(db), provider_name=settings.llm_provider)
+    llm_provider = get_llm_provider()
+    tracked_llm = TrackingLLMProvider(llm_provider, LLMUsageRepository(db), provider_name=settings.llm_provider)
+
+    # Credential pre-flight, logged loudly but non-fatal: get_llm_provider() never raises by
+    # design (see its own docstring — a misconfigured LLM provider must not block every other
+    # route), so a bad Bedrock credential setup would otherwise stay silent until the first real
+    # chat message needs one, possibly hours later. This surfaces it immediately in the startup
+    # logs instead. For an actual hard-fail check (CI/pre-deploy), use
+    # `python -m app.llm.providers.bedrock` instead — deliberately not what happens here.
+    if isinstance(llm_provider, BedrockProvider):
+        try:
+            await llm_provider.verify_credentials()
+            logger.info("Bedrock credentials verified at startup (profile=%s)", settings.aws_profile or "default chain")
+        except Exception:
+            logger.error(
+                "Bedrock credentials could NOT be resolved at startup (profile=%r, region=%s) — "
+                "real LLM calls will fail until this is fixed. Run "
+                "`python -m app.llm.providers.bedrock` for a standalone check.",
+                settings.aws_profile,
+                settings.bedrock_region,
+                exc_info=True,
+            )
     app.state.graph = build_graph(
         classifier=get_intent_classifier(llm=tracked_llm),
         db=db,

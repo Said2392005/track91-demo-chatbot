@@ -1,10 +1,11 @@
 """
 TrackingLLMProvider tests. Two scenarios required by this feature's spec:
-1. A normal call with real token counts (a fake inner provider standing in for Groq's actual
-   response shape — already verified against a real live Groq call in test_llm_provider.py's
-   usage-parsing tests; a real end-to-end Groq call through the tracking wrapper is exercised
-   separately in test_llm_usage_real_groq.py, opt-in on GROQ_API_KEY being configured, per this
-   suite's existing "no live API calls by default" policy — see test_llm_provider.py).
+1. A normal call with real token counts (a fake inner provider standing in for a real
+   provider's parsed response shape — already verified against real live Bedrock/Groq calls in
+   test_bedrock_provider.py and the OpenAI-compatible usage-parsing tests; a real end-to-end
+   call through the tracking wrapper is exercised opt-in in tests/test_max_tokens_real_bedrock.py,
+   gated on AWS credentials being resolvable, per this suite's "no live API calls by default"
+   policy).
 2. A provider that returns no token data at all (FakeLLMProvider, usage=None by default) —
    must record gracefully, not crash.
 """
@@ -24,7 +25,7 @@ class _FixedUsageProvider:
     """A minimal LLMProvider double that reports real, fixed token counts — standing in for a
     real OpenAI-compatible provider's parsed response without needing network access."""
 
-    def __init__(self, prompt_tokens: int, completion_tokens: int, model: str = "llama-3.3-70b-versatile"):
+    def __init__(self, prompt_tokens: int, completion_tokens: int, model: str = "openai.gpt-oss-120b-1:0"):
         self._usage = TokenUsage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
         self._model = model
 
@@ -34,7 +35,7 @@ class _FixedUsageProvider:
 
 async def test_normal_call_with_real_token_counts_is_recorded(db):
     usage_repo = LLMUsageRepository(db)
-    tracked = TrackingLLMProvider(_FixedUsageProvider(prompt_tokens=42, completion_tokens=8), usage_repo, provider_name="groq")
+    tracked = TrackingLLMProvider(_FixedUsageProvider(prompt_tokens=42, completion_tokens=8), usage_repo, provider_name="bedrock")
 
     company_id, user_id, session_id = ObjectId(), ObjectId(), ObjectId()
     with llm_call_identity(company_id, user_id, session_id):
@@ -50,8 +51,8 @@ async def test_normal_call_with_real_token_counts_is_recorded(db):
     assert summary["calls_missing_usage"] == 0
 
     raw = await db.llm_usage.find_one({"company_id": company_id})
-    assert raw["provider"] == "groq"
-    assert raw["model"] == "llama-3.3-70b-versatile"
+    assert raw["provider"] == "bedrock"
+    assert raw["model"] == "openai.gpt-oss-120b-1:0"
     assert raw["call_type"] == "response_synthesis"
     assert raw["user_id"] == user_id
     assert raw["session_id"] == session_id
@@ -88,7 +89,7 @@ async def test_call_with_no_ambient_identity_set_does_not_crash(db):
     a stray test, or a future call site that forgets to set identity) has nothing to attribute
     usage to — must skip recording, not raise, and the underlying call must still succeed."""
     usage_repo = LLMUsageRepository(db)
-    tracked = TrackingLLMProvider(FakeLLMProvider(canned_response="an answer"), usage_repo, provider_name="groq")
+    tracked = TrackingLLMProvider(FakeLLMProvider(canned_response="an answer"), usage_repo, provider_name="bedrock")
 
     # db is a session-scoped fixture shared across this whole test file, so other tests' rows
     # are already present — compare a before/after delta rather than an absolute count.
@@ -113,7 +114,7 @@ async def test_call_type_kwarg_is_not_forwarded_to_the_inner_provider(db):
             return LLMResponse(content="ok", model="spy-model")
 
     usage_repo = LLMUsageRepository(db)
-    tracked = TrackingLLMProvider(_SpyProvider(), usage_repo, provider_name="groq")
+    tracked = TrackingLLMProvider(_SpyProvider(), usage_repo, provider_name="bedrock")
 
     with llm_call_identity(ObjectId(), ObjectId(), ObjectId()):
         await tracked.generate([Message(role="user", content="hi")], call_type="rag_generation", temperature=0.5)

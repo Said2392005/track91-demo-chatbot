@@ -306,6 +306,109 @@ async def test_vague_followup_with_no_pronoun_uses_active_entity_not_crash(db, k
     )
 
 
+async def test_asking_about_driver_does_not_reuse_active_vehicle_from_memory(db, kb_collection, real_checkpointer):
+    """Real bug, reproduced live: turn 1 establishes an active vehicle. Turn 2 asks "where is
+    my driver" — classified as GET_VEHICLE_LOCATION via the bare "where is" phrase (a
+    pre-existing classifier imprecision, not fixed here), but must NOT silently reuse turn 1's
+    vehicle from active_entities to answer it: "driver" names a different entity type than
+    what's in memory, so route()'s memory-fill must be suppressed and the turn should ask for
+    clarification instead of returning a confident, specific-sounding but wrong-context GPS
+    coordinate. This is a worse failure mode than a decline — it looks like a real answer."""
+    company_id, vehicle_id = ObjectId(), ObjectId()
+    now = datetime.now(timezone.utc)
+    await db.vehicles.insert_one(
+        {"_id": vehicle_id, "company_id": company_id, "plate_number": "MH12AB1234", "status": "active", "created_at": now}
+    )
+    session = await SessionRepository(db).create(company_id, ObjectId(), now)
+    session_id = session["_id"]
+
+    graph = _graph(db, kb_collection, real_checkpointer)
+    config = {"configurable": {"thread_id": str(session_id)}}
+
+    turn1 = await graph.ainvoke(
+        {"utterance": "Where is MH12AB1234?", "company_id": str(company_id), "session_id": str(session_id), "now": now},
+        config=config,
+    )
+    assert turn1["route_outcome"] == "TOOL_CALL"
+
+    turn2 = await graph.ainvoke(
+        {
+            "utterance": "where is my driver",
+            "company_id": str(company_id),
+            "session_id": str(session_id),
+            "now": now + timedelta(seconds=30),
+        },
+        config=config,
+    )
+    assert turn2["route_outcome"] == "CLARIFICATION_NEEDED", "must not answer with turn 1's vehicle — 'driver' is a different entity type"
+    assert turn2.get("tool_result") is None
+
+
+async def test_unrelated_driver_question_after_resolved_vehicle_clarification_is_not_a_stale_resume(
+    db, kb_collection, real_checkpointer
+):
+    """Reported live as a suspected regression from a (never-built) persistence fix: turn 1
+    "where is my vehicle and driver" asks to disambiguate the vehicle (two vehicles on the
+    company); turn 2 "KA05EF9012" correctly resolves and answers the location; turn 3, a brand
+    new and otherwise-unrelated "where is my driver", again returns the vehicle-disambiguation
+    prompt — which looked like turn 1's pending_clarification being wrongly resumed against an
+    unrelated question.
+
+    Verified live it is NOT that: pop_pending_clarification's atomic $unset clears the field by
+    the end of turn 2 (asserted directly against the DB below), so turn 3 starts with no pending
+    state at all. It is a fresh, independent misclassification, same root cause and same accepted
+    behavior as test_asking_about_driver_does_not_reuse_active_vehicle_from_memory above:
+    GET_VEHICLE_LOCATION's bare "where is" TRIGGER_PHRASES entry (trigger_patterns.py) scores
+    regardless of subject, so "where is my driver" hits GET_VEHICLE_LOCATION with no vehicle
+    resolvable, on its own, with zero connection to turns 1-2. Pinned as its own case because the
+    setup (an ambiguous *compound* first turn, resolved over two turns, in the same session) is a
+    new combination the existing test doesn't cover, and because the resemblance to a resumed
+    clarification is exactly the confusion this test exists to rule out."""
+    company_id, v1, v2 = ObjectId(), ObjectId(), ObjectId()
+    now = datetime.now(timezone.utc)
+    await db.vehicles.insert_many(
+        [
+            {"_id": v1, "company_id": company_id, "plate_number": "KA05EF9012", "status": "active", "created_at": now},
+            {"_id": v2, "company_id": company_id, "plate_number": "MH12AB1234", "status": "active", "created_at": now},
+        ]
+    )
+    session = await SessionRepository(db).create(company_id, ObjectId(), now)
+    session_id = session["_id"]
+
+    graph = _graph(db, kb_collection, real_checkpointer)
+    config = {"configurable": {"thread_id": str(session_id)}}
+
+    turn1 = await graph.ainvoke(
+        {"utterance": "where is my vehicle and driver", "company_id": str(company_id), "session_id": str(session_id), "now": now},
+        config=config,
+    )
+    assert turn1["route_outcome"] == "CLARIFICATION_NEEDED"
+    assert turn1["secondary_raw_intent"] is None, "bare singular 'driver' scores 0 — see second_intent_golden_set's KNOWN_MISS case"
+
+    turn2 = await graph.ainvoke(
+        {
+            "utterance": "KA05EF9012",
+            "company_id": str(company_id),
+            "session_id": str(session_id),
+            "now": now + timedelta(seconds=30),
+        },
+        config=config,
+    )
+    assert turn2["route_outcome"] == "TOOL_CALL"
+    assert turn2["entities"]["vehicle_id"] == str(v1)
+
+    doc = await db.chat_sessions.find_one({"_id": session_id})
+    assert doc.get("pending_clarification") is None, "must be fully cleared before turn 3 — rules out a stale resume as the cause"
+
+    turn3 = await graph.ainvoke(
+        {"utterance": "where is my driver", "company_id": str(company_id), "session_id": str(session_id), "now": now + timedelta(minutes=1)},
+        config=config,
+    )
+    assert turn3["raw_intent"] == "GET_VEHICLE_LOCATION", "fresh misclassification via the bare 'where is' phrase, not a resumed intent"
+    assert turn3["route_outcome"] == "CLARIFICATION_NEEDED"
+    assert turn3.get("tool_result") is None, "must not silently reuse turn 2's vehicle — 'driver' is a different entity type"
+
+
 async def test_affirm_deny_reply_to_a_real_clarifying_question(db, kb_collection, real_checkpointer):
     """The AFFIRM_DENY gap flagged earlier: awaiting_clarification was only ever set manually
     in tests/the eval golden set, never by a real conversation, so a real "Yes"/"No" reply to a
@@ -330,3 +433,138 @@ async def test_affirm_deny_reply_to_a_real_clarifying_question(db, kb_collection
         config=config,
     )
     assert turn2["raw_intent"] == "AFFIRM_DENY", "a real 'Yes' reply to a real clarifying question must classify as AFFIRM_DENY"
+
+
+async def test_dual_intent_both_resolve_cleanly(db, kb_collection, real_checkpointer):
+    """Q2's "middle option", wired in: "list drivers and MH12AB1234 location" scores real
+    signal for both GET_DRIVER_ROSTER (primary) and GET_VEHICLE_LOCATION (secondary — the plate
+    lets vehicle_ref resolve without needing prior session memory). Both tools actually run;
+    the merged answer covers both; final_intent reflects both, not just the primary (the same
+    "reflect what actually happened" principle the earlier final_intent fix established, now
+    applied to the two-intent case)."""
+    company_id, vehicle_id = ObjectId(), ObjectId()
+    now = datetime.now(timezone.utc)
+    await db.vehicles.insert_one(
+        {"_id": vehicle_id, "company_id": company_id, "plate_number": "MH12AB1234", "status": "active", "created_at": now}
+    )
+    await db.drivers.insert_one(
+        {"_id": ObjectId(), "company_id": company_id, "name": "Ramesh Kumar", "status": "active", "created_at": now}
+    )
+    session = await SessionRepository(db).create(company_id, ObjectId(), now)
+    session_id = session["_id"]
+
+    fake = FakeLLMProvider(canned_response=["driver roster answer", "vehicle location answer"])
+    graph = _graph(db, kb_collection, real_checkpointer, llm=fake)
+    config = {"configurable": {"thread_id": str(session_id)}}
+
+    turn = await graph.ainvoke(
+        {
+            "utterance": "list drivers and MH12AB1234 location",
+            "company_id": str(company_id),
+            "session_id": str(session_id),
+            "now": now,
+        },
+        config=config,
+    )
+
+    assert turn["raw_intent"] == "GET_DRIVER_ROSTER"
+    assert turn["secondary_raw_intent"] == "GET_VEHICLE_LOCATION"
+    assert turn["route_outcome"] == "TOOL_CALL"
+    assert turn["secondary_route_outcome"] == "TOOL_CALL"
+    assert turn["final_intent"] == "GET_DRIVER_ROSTER+GET_VEHICLE_LOCATION"
+    assert "driver roster answer" in turn["response_text"]
+    assert "vehicle location answer" in turn["response_text"]
+    assert turn["tool_result"] is not None
+    assert turn["secondary_tool_result"] is not None
+
+
+async def test_dual_intent_primary_resolves_secondary_needs_clarification(db, kb_collection, real_checkpointer):
+    """"list drivers and vehicle location" (no plate this time) — GET_DRIVER_ROSTER (primary)
+    resolves cleanly, GET_VEHICLE_LOCATION (secondary) has nothing to resolve vehicle_ref
+    against. Per the documented design decision: the primary is answered in full, not withheld
+    behind a combined question, and the secondary's clarifying question is appended. A bare
+    follow-up plate number next turn must then resume GET_VEHICLE_LOCATION via the same
+    pending-clarification mechanism a single-intent turn already uses — proving
+    memory_update_node's new pending_clarification write for the secondary actually works, not
+    just that it was called."""
+    company_id, vehicle_id = ObjectId(), ObjectId()
+    now = datetime.now(timezone.utc)
+    await db.vehicles.insert_one(
+        {"_id": vehicle_id, "company_id": company_id, "plate_number": "MH12AB1234", "status": "active", "created_at": now}
+    )
+    await db.drivers.insert_one(
+        {"_id": ObjectId(), "company_id": company_id, "name": "Ramesh Kumar", "status": "active", "created_at": now}
+    )
+    session = await SessionRepository(db).create(company_id, ObjectId(), now)
+    session_id = session["_id"]
+
+    fake = FakeLLMProvider(canned_response="driver roster answer")
+    graph = _graph(db, kb_collection, real_checkpointer, llm=fake)
+    config = {"configurable": {"thread_id": str(session_id)}}
+
+    turn1 = await graph.ainvoke(
+        {"utterance": "list drivers and vehicle location", "company_id": str(company_id), "session_id": str(session_id), "now": now},
+        config=config,
+    )
+
+    assert turn1["raw_intent"] == "GET_DRIVER_ROSTER"
+    assert turn1["route_outcome"] == "TOOL_CALL", "the primary must still execute and answer in full"
+    assert turn1["secondary_raw_intent"] == "GET_VEHICLE_LOCATION"
+    assert turn1["secondary_route_outcome"] == "CLARIFICATION_NEEDED"
+    assert turn1["final_intent"] == "GET_DRIVER_ROSTER+CLARIFICATION_NEEDED"
+    assert "driver roster answer" in turn1["response_text"], "primary answer must not be withheld"
+    assert "vehicle" in turn1["response_text"].lower(), "secondary's clarifying question must be appended"
+
+    pending = await SessionRepository(db).pop_pending_clarification(company_id, session_id)
+    assert pending == {"intent": "GET_VEHICLE_LOCATION", "missing": "vehicle_ref"}
+    # Restore it — the real flow reads it via entry_node on the next turn, not via this
+    # assertion's own pop.
+    await SessionRepository(db).set_pending_clarification(company_id, session_id, "GET_VEHICLE_LOCATION", "vehicle_ref", now)
+
+    turn2 = await graph.ainvoke(
+        {
+            "utterance": "MH12AB1234",
+            "company_id": str(company_id),
+            "session_id": str(session_id),
+            "now": now + timedelta(seconds=30),
+        },
+        config=config,
+    )
+    assert turn2["raw_intent"] == "GET_VEHICLE_LOCATION", "bare plate must resume the secondary's pending intent"
+    assert turn2["route_outcome"] == "TOOL_CALL"
+    assert turn2["entities"]["vehicle_id"] == str(vehicle_id)
+
+
+async def test_second_intent_negatives_execute_as_pure_single_intent_through_the_full_graph(db, kb_collection, real_checkpointer):
+    """The exact 7 negative cases from app/eval/second_intent_golden_set.py (measured 0%
+    false-positive standalone) run through the REAL graph — proving the wiring, not just the
+    detector function in isolation, correctly treats them as single-intent turns: no secondary
+    fields populated, no appended clarifying question, no "+" in final_intent."""
+    from app.eval.second_intent_golden_set import SECOND_INTENT_GOLDEN_SET
+
+    negatives = [c for c in SECOND_INTENT_GOLDEN_SET if not c.expect_second_intent]
+    assert len(negatives) >= 7
+
+    company_id, vehicle_id = ObjectId(), ObjectId()
+    now = datetime.now(timezone.utc)
+    await db.vehicles.insert_one(
+        {"_id": vehicle_id, "company_id": company_id, "plate_number": "MH12AB1234", "status": "active", "created_at": now}
+    )
+    await db.vehicles.insert_one(
+        {"_id": ObjectId(), "company_id": company_id, "plate_number": "MH14CD5678", "status": "active", "created_at": now}
+    )
+    for name in ("Ramesh Kumar", "Suresh Patil"):
+        await db.drivers.insert_one({"_id": ObjectId(), "company_id": company_id, "name": name, "status": "active", "created_at": now})
+
+    fake = FakeLLMProvider(canned_response="canned answer. [Source 1]")
+    graph = _graph(db, kb_collection, real_checkpointer, llm=fake)
+
+    for case in negatives:
+        session = await SessionRepository(db).create(company_id, ObjectId(), now)
+        config = {"configurable": {"thread_id": str(session["_id"])}}
+        turn = await graph.ainvoke(
+            {"utterance": case.utterance, "company_id": str(company_id), "session_id": str(session["_id"]), "now": now},
+            config=config,
+        )
+        assert turn.get("secondary_route_outcome") is None, f"{case.case_id}: {case.utterance!r} wrongly detected a secondary intent"
+        assert "+" not in (turn.get("final_intent") or ""), f"{case.case_id}: final_intent should not be compound"

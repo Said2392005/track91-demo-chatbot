@@ -1,137 +1,82 @@
 """
 Index definitions per collection.
 
-Rule (ADR 004, docs/phase-2-architecture/adr/004-tenant-scoping-enforcement.md): every
-compound index on tenant-scoped data leads with `company_id`, so tenant scoping is also the
-performant access path, not just a correctness constraint.
+Reshaped alongside schema_definitions.py for the 2026-08-12 DBML redesign. Compound indexes
+still lead with the collection's tenant/parent-scoping field (org_id, product_id, etc.) where
+the DBML implies one, following this codebase's existing access-path convention — but no
+TTL or uniqueness constraint is added beyond what the DBML actually states. The previous
+schema's `session_ttl_idx` (sliding idle-timeout on chat_sessions) was a Phase 8 product
+requirement, not something implied by a relational schema; whether chat_sessions in this new
+domain should also auto-expire is an open product question, not assumed here.
 """
 
-from pymongo import ASCENDING, GEOSPHERE
-
-from app.core.config import settings
+from pymongo import ASCENDING
 
 # Each entry: (keys: list[(field, direction)], options: dict)
 INDEX_DEFINITIONS: dict[str, list[tuple[list[tuple[str, int]], dict]]] = {
-    "companies": [
-        ([("name", ASCENDING)], {"name": "name_idx"}),
+    "organizations": [
+        (
+            [("organization_code", ASCENDING)],
+            {
+                "name": "organization_code_unique",
+                "unique": True,
+                # organization_code is [unique] but not [not null] in the source DBML —
+                # partialFilterExpression (not sparse) so multiple docs missing it don't
+                # collide, same reasoning as the old company_device_unique index had.
+                "partialFilterExpression": {"organization_code": {"$exists": True}},
+            },
+        ),
     ],
     "users": [
         ([("email", ASCENDING)], {"name": "email_unique", "unique": True}),
-        ([("company_id", ASCENDING)], {"name": "company_idx"}),
+        ([("org_id", ASCENDING)], {"name": "org_idx"}),
     ],
-    "vehicles": [
-        (
-            [("company_id", ASCENDING), ("plate_number", ASCENDING)],
-            {"name": "company_plate_unique", "unique": True},
-        ),
-        (
-            # NOT `sparse: True` — on a COMPOUND index, sparse only skips docs missing *all*
-            # indexed fields, and company_id is always present, so sparse alone doesn't skip
-            # vehicles missing just device_id (a real state: a vehicle can exist before a GPS
-            # device is registered to it, per kb_sources/app_faq/track91-app-faq.md). Without
-            # partialFilterExpression, two such vehicles at the same company collide on
-            # device_id: null. Caught by tests/test_entity_extractor.py's seed fixture.
-            [("company_id", ASCENDING), ("device_id", ASCENDING)],
-            {
-                "name": "company_device_unique",
-                "unique": True,
-                "partialFilterExpression": {"device_id": {"$exists": True}},
-            },
-        ),
-        (
-            [("company_id", ASCENDING), ("assigned_driver_id", ASCENDING)],
-            {"name": "company_driver_idx"},
-        ),
+    "products": [
+        ([("org_id", ASCENDING)], {"name": "org_idx"}),
+        ([("org_id", ASCENDING), ("status", ASCENDING)], {"name": "org_status_idx"}),
     ],
-    "drivers": [
-        ([("company_id", ASCENDING)], {"name": "company_idx"}),
-        (
-            # Same compound-sparse pitfall as vehicles.company_device_unique above — see the
-            # comment there. partialFilterExpression, not sparse, is what actually excludes
-            # drivers missing license_number from the uniqueness constraint.
-            [("company_id", ASCENDING), ("license_number", ASCENDING)],
-            {
-                "name": "company_license_unique",
-                "unique": True,
-                "partialFilterExpression": {"license_number": {"$exists": True}},
-            },
-        ),
+    "categories": [
+        ([("product_id", ASCENDING)], {"name": "product_idx"}),
     ],
-    "trips": [
-        (
-            [("company_id", ASCENDING), ("vehicle_id", ASCENDING), ("start_time", ASCENDING)],
-            {"name": "company_vehicle_time_idx"},
-        ),
-        (
-            [("company_id", ASCENDING), ("driver_id", ASCENDING), ("start_time", ASCENDING)],
-            {"name": "company_driver_time_idx"},
-        ),
+    "features": [
+        ([("product_id", ASCENDING)], {"name": "product_idx"}),
+        ([("category_id", ASCENDING)], {"name": "category_idx"}),
     ],
-    "alerts": [
-        (
-            [("company_id", ASCENDING), ("vehicle_id", ASCENDING), ("triggered_at", ASCENDING)],
-            {"name": "company_vehicle_time_idx"},
-        ),
-        (
-            [("company_id", ASCENDING), ("alert_type", ASCENDING), ("triggered_at", ASCENDING)],
-            {"name": "company_type_time_idx"},
-        ),
-        (
-            [("company_id", ASCENDING), ("acknowledged", ASCENDING)],
-            {"name": "company_ack_idx"},
-        ),
+    "services": [
+        ([("product_id", ASCENDING)], {"name": "product_idx"}),
+        ([("category_id", ASCENDING)], {"name": "category_idx"}),
     ],
-    "maintenance_records": [
-        (
-            [("company_id", ASCENDING), ("vehicle_id", ASCENDING), ("service_date", ASCENDING)],
-            {"name": "company_vehicle_service_idx"},
-        ),
-        (
-            [("company_id", ASCENDING), ("next_due_date", ASCENDING)],
-            {"name": "company_due_idx"},
-        ),
+    "api_keys": [
+        ([("org_id", ASCENDING)], {"name": "org_idx"}),
+        ([("product_id", ASCENDING)], {"name": "product_idx"}),
+        ([("key_hash", ASCENDING)], {"name": "key_hash_idx"}),
     ],
-    "geofences": [
-        ([("company_id", ASCENDING), ("active", ASCENDING)], {"name": "company_active_idx"}),
-        ([("geometry", GEOSPHERE)], {"name": "geometry_2dsphere"}),
+    "auth_sessions": [
+        ([("user_id", ASCENDING)], {"name": "user_idx"}),
+        ([("access_token_hash", ASCENDING)], {"name": "access_token_idx"}),
+        ([("refresh_token_hash", ASCENDING)], {"name": "refresh_token_idx"}),
+    ],
+    "documents": [
+        ([("product_id", ASCENDING)], {"name": "product_idx"}),
+    ],
+    "document_chunks": [
+        ([("document_id", ASCENDING), ("chunk_index", ASCENDING)], {"name": "document_chunk_idx"}),
+        ([("product_id", ASCENDING)], {"name": "product_idx"}),
+        ([("vector_id", ASCENDING)], {"name": "vector_id_idx"}),
+    ],
+    "knowledge_items": [
+        ([("product_id", ASCENDING)], {"name": "product_idx"}),
+    ],
+    "prompt_configurations": [
+        ([("product_id", ASCENDING)], {"name": "product_idx"}),
+        ([("product_id", ASCENDING), ("is_active", ASCENDING)], {"name": "product_active_idx"}),
     ],
     "chat_sessions": [
-        (
-            [("company_id", ASCENDING), ("user_id", ASCENDING), ("last_active_at", ASCENDING)],
-            {"name": "company_user_activity_idx"},
-        ),
-        (
-            # TTL index, not just a lookup index: MongoDB's TTL monitor re-evaluates against
-            # the CURRENT value of last_active_at on every sweep, so touching this field on
-            # every turn (session_repository.py) makes this a sliding idle-timeout — a session
-            # expires N seconds after its last activity, not N seconds after creation. Phase 8
-            # requirement: session state must expire, not persist indefinitely.
-            [("last_active_at", ASCENDING)],
-            {"name": "session_ttl_idx", "expireAfterSeconds": settings.session_ttl_seconds},
-        ),
+        ([("session_key", ASCENDING)], {"name": "session_key_unique", "unique": True}),
+        ([("product_id", ASCENDING), ("last_active_at", ASCENDING)], {"name": "product_activity_idx"}),
+        ([("user_id", ASCENDING)], {"name": "user_idx"}),
     ],
     "chat_messages": [
         ([("session_id", ASCENDING), ("created_at", ASCENDING)], {"name": "session_time_idx"}),
-        ([("company_id", ASCENDING), ("created_at", ASCENDING)], {"name": "company_time_idx"}),
-    ],
-    "documents_meta": [
-        ([("source_type", ASCENDING)], {"name": "source_type_idx"}),
-        ([("approved_pricing", ASCENDING)], {"name": "approved_pricing_idx"}),
-        (
-            [("title", ASCENDING), ("version", ASCENDING)],
-            {"name": "title_version_unique", "unique": True},
-        ),
-    ],
-    "llm_usage": [
-        (
-            # The summary-over-time-period endpoint's access path: sum usage for a company
-            # between two timestamps.
-            [("company_id", ASCENDING), ("created_at", ASCENDING)],
-            {"name": "company_time_idx"},
-        ),
-        (
-            [("company_id", ASCENDING), ("user_id", ASCENDING), ("created_at", ASCENDING)],
-            {"name": "company_user_time_idx"},
-        ),
     ],
 }

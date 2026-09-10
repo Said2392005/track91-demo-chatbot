@@ -89,11 +89,17 @@ async def test_nickname_resolves(db, seeded):
 
 
 async def test_unknown_but_validly_formatted_plate_is_unresolved(db, seeded):
+    """Doesn't resolve to a specific vehicle — but since this company (per `seeded`) has more
+    than one, it now falls into the multi-vehicle disambiguation (ambiguous, not a bare
+    unresolved_required) rather than a generic "which vehicle?" — see
+    test_multi_vehicle_disambiguation.py's dedicated single-vehicle-company test for the case
+    where that list would be pointless."""
     result = await extract_entities(
         "where is MH99ZZ9999", "GET_VEHICLE_LOCATION", seeded["company_id"], db
     )
     assert "vehicle_id" not in result.entities
-    assert "vehicle_ref" in result.unresolved_required
+    assert "vehicle_ref" in result.ambiguous
+    assert result.ambiguous["vehicle_ref"]["reason"] == "unspecified"
 
 
 async def test_plate_does_not_resolve_across_tenants(db, seeded):
@@ -101,7 +107,13 @@ async def test_plate_does_not_resolve_across_tenants(db, seeded):
         "where is DL01GH3456", "GET_VEHICLE_LOCATION", seeded["company_id"], db
     )
     assert "vehicle_id" not in result.entities
-    assert "vehicle_ref" in result.unresolved_required
+    # Falls back to listing this company's own vehicles (not the unresolved plate) — and
+    # critically, the list itself must never include the other company's vehicle whose plate
+    # was actually typed, nor its plate number. That's the real tenant-isolation assertion here.
+    assert "vehicle_ref" in result.ambiguous
+    candidates = result.ambiguous["vehicle_ref"]["candidates"]
+    assert all(v["company_id"] == seeded["company_id"] for v in candidates)
+    assert "DL01GH3456" not in {v["plate_number"] for v in candidates}
 
 
 async def test_missing_date_range_is_unresolved_even_with_vehicle_present(db, seeded):
@@ -131,16 +143,22 @@ async def test_driver_name_collision_is_ambiguous_not_silently_picked(db, seeded
 
 
 async def test_empty_utterance_does_not_crash_and_leaves_required_unresolved(db, seeded):
+    # This company (per `seeded`) has more than one vehicle, so a required, unidentified
+    # vehicle_ref lands in `ambiguous` (the multi-vehicle list), not `unresolved_required` — see
+    # test_multi_vehicle_disambiguation.py for the exactly-one-vehicle case, which does leave it
+    # in unresolved_required.
     result = await extract_entities("", "GET_VEHICLE_SPEED", seeded["company_id"], db)
     assert result.entities == {}
-    assert "vehicle_ref" in result.unresolved_required
+    assert "vehicle_ref" not in result.unresolved_required
+    assert "vehicle_ref" in result.ambiguous
 
 
 async def test_garbled_partial_input_does_not_crash(db, seeded):
     result = await extract_entities("uhh MH12A speed??", "GET_VEHICLE_SPEED", seeded["company_id"], db)
     # "MH12A" is not a valid plate shape (missing digits) — must not resolve, must not crash.
+    # Falls into the same multi-vehicle-list path as the empty-utterance case above.
     assert "vehicle_id" not in result.entities
-    assert "vehicle_ref" in result.unresolved_required
+    assert "vehicle_ref" in result.ambiguous
 
 
 async def test_alert_type_synonym_sos_maps_to_panic(db, seeded):

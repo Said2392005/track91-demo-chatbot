@@ -102,9 +102,22 @@ No data fetch. Handled directly by the dialogue layer.
 | `GREETING` | Opening a conversation | "Hi" · "Hello" · "Good morning" | Yes |
 | `GOODBYE` | Ending a conversation | "Thanks, bye" · "That's all" | Yes |
 | `CHITCHAT` | Small talk unrelated to fleet data | "How are you?" · "What can you do?" | Yes |
+| `ABOUT_TRACK91` | Self-identity: what Track91 is/does | "What is Track91?" · "Is Track91 a GPS app?" | Yes |
 | `CLARIFICATION_NEEDED` | Ambiguous/missing entity in an otherwise valid intent | "What's its speed?" with no prior vehicle in context | Yes |
 | `AFFIRM_DENY` | Yes/no follow-up to a bot-asked clarifying question | "Yes, that one" · "No, the other truck" | Yes |
 | `OUT_OF_SCOPE` | Request outside fleet-management domain entirely | "Write me a poem" · "What's the weather in Delhi?" | Yes |
+
+**`ABOUT_TRACK91` added post-launch, reversing an earlier decision.** This session originally
+left company-identity questions ("what is your company name") to fall through to `OUT_OF_SCOPE`
+or `GENERAL_KNOWLEDGE`, reasoning that a fleet-management operational bot didn't need a
+marketing/about-us surface and that `GENERAL_KNOWLEDGE`'s system prompt explicitly forbids
+stating anything Track91-specific. Real testing showed this was wrong in practice: "is Track91 a
+GPS app?" fell through to `GENERAL_KNOWLEDGE` and produced a generic, unhelpful answer about GPS
+apps in general — confusing for a question that was specifically about this product. Fixed with
+a small, fixed, non-LLM-generated response (`app/agent/templates.py`), positively triggered
+(`app/nlu/trigger_patterns.py`) so it outranks the `GENERAL_KNOWLEDGE` fallback path the same
+way every other real trigger already does — `GENERAL_KNOWLEDGE` has no positive triggers of its
+own and is only ever reached once nothing else scores.
 
 ## Notes for Phase 6/9
 

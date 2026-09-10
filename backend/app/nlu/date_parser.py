@@ -45,6 +45,7 @@ def _today(now: datetime, tz: ZoneInfo) -> date:
     return now.astimezone(tz).date()
 
 
+
 def _day_bounds(d: date, tz: ZoneInfo) -> tuple[datetime, datetime]:
     start = datetime(d.year, d.month, d.day, tzinfo=tz)
     return start, start + timedelta(days=1)

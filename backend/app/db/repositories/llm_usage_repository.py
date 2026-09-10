@@ -1,5 +1,16 @@
 """LLM usage repository — backs per-call token tracking (app/llm/usage_tracking.py) and the
-GET /usage/summary endpoint. ADR 001 (repository pattern) / ADR 004 (company_id required)."""
+GET /usage/summary endpoint. ADR 001 (repository pattern) / ADR 004 (company_id required).
+
+NOT MIGRATED to the new schema (2026-08-12 DBML redesign) — left unchanged, functional but
+now pointed at a collection that no longer exists in schema_definitions.py/init_db.py. Mongo
+will silently auto-create an unvalidated `llm_usage` collection on the first insert_one() call
+rather than erroring, so this will keep "working" with zero schema enforcement and no indexes
+until someone notices. The new DBML's `messages` table models one LLM call per message
+(prompt_tokens/output_tokens/total_tokens directly on the message); this repository's
+`call_type` field assumes up to 4 LLM calls per turn (intent_classification,
+response_synthesis, rag_generation, general_knowledge), which has no home in the new schema.
+Needs a product decision — fold into chat_messages fields, or keep a separate usage
+collection and add it to the DBML — not resolved unilaterally here."""
 
 from datetime import datetime
 

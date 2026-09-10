@@ -41,6 +41,57 @@ _PLATE_CANDIDATE_RE = re.compile(
 # "Where") simply fails to resolve and is discarded, so no stoplist is needed for correctness.
 _NAME_CANDIDATE_RE = re.compile(r"\b([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\b")
 
+# A bare 4-digit token — "last 4 digits of the plate" replies to a vehicle disambiguation
+# question (e.g. "1234", "it's 1234", "ending in 1234"). Only extracted when exactly one such
+# token is present, and only ever consulted when allow_last4_match=True (see
+# _resolve_vehicle_ref) — gated to the pending-clarification-resume path in app/nlu/pipeline.py,
+# never general free-text extraction, so an unrelated 4-digit number elsewhere in a message
+# (a year, a phone-number fragment) can't accidentally trigger a plate match.
+_LAST4_RE = re.compile(r"\b(\d{4})\b")
+
+
+def _extract_bare_last4(utterance: str) -> str | None:
+    matches = _LAST4_RE.findall(utterance)
+    return matches[0] if len(matches) == 1 else None
+
+
+# Stricter than _LAST4_RE above: the ENTIRE utterance (modulo surrounding whitespace and one
+# trailing punctuation mark) must be just 4 digits, nothing else. Used only for a first message
+# with no prior context (app/nlu/pipeline.py) — there, unlike the clarification-resume path,
+# there's no already-established context confirming the user is specifically answering a plate
+# question, so a message that merely *contains* 4 digits somewhere ("call 1234 for support",
+# "meet me at 1234 Main Street") must NOT trigger a vehicle lookup — only a message that IS just
+# the 4 digits.
+_WHOLE_UTTERANCE_LAST4_RE = re.compile(r"^\s*(\d{4})\s*[.!?]?\s*$")
+
+
+@dataclass
+class BareLast4Resolution:
+    vehicle: dict | None = None
+    ambiguous: dict | None = None  # {"reason": "identified_no_intent_collision", "candidates": [...]}
+
+
+async def resolve_first_message_bare_last4(
+    utterance: str, company_id: ObjectId, db: AsyncIOMotorDatabase
+) -> BareLast4Resolution:
+    """For a first message with no pending clarification and no classifiable intent — checks
+    whether the utterance is *just* 4 digits and, if so, whether they match this company's own
+    vehicles by plate suffix. Returns which vehicle (if exactly one matched) or the colliding
+    candidates (if more than one did); returns an empty result if the utterance isn't a bare
+    4-digit message or nothing matched. Never guesses which *intent* the user wants — that's
+    intentionally left to the caller (app/nlu/pipeline.py) to turn into a clarifying question,
+    not decided here."""
+    match = _WHOLE_UTTERANCE_LAST4_RE.match(utterance)
+    if not match:
+        return BareLast4Resolution()
+    last4 = match.group(1)
+    matches = await VehicleRepository(db).find_by_plate_last4(company_id, last4)
+    if len(matches) == 1:
+        return BareLast4Resolution(vehicle=matches[0])
+    if len(matches) > 1:
+        return BareLast4Resolution(ambiguous={"reason": "identified_no_intent_collision", "candidates": matches})
+    return BareLast4Resolution()
+
 
 @dataclass
 class ExtractionResult:
@@ -50,15 +101,34 @@ class ExtractionResult:
 
 
 async def _resolve_vehicle_ref(
-    utterance: str, company_id: ObjectId, vehicle_repo: VehicleRepository
-) -> dict | None:
+    utterance: str, company_id: ObjectId, vehicle_repo: VehicleRepository, *, allow_last4_match: bool = False
+) -> tuple[dict | None, dict | None]:
+    """Returns (resolved_vehicle_or_None, ambiguous_info_or_None). ambiguous_info here is only
+    ever the last4-collision case (the utterance DID identify something, it just wasn't unique)
+    — the "nothing in the utterance identifies a vehicle at all, but this company has more than
+    one" case is decided by the caller, since it needs the caller's own pronoun/active-entity
+    check to have already come up empty first."""
     for candidate in _PLATE_CANDIDATE_RE.findall(utterance):
         normalized = normalize_plate_candidate(candidate)
         if is_valid_plate(normalized):
             vehicle = await vehicle_repo.find_by_plate_number(company_id, normalized)
             if vehicle:
-                return vehicle
-    return await vehicle_repo.find_by_nickname_containing(company_id, utterance)
+                return vehicle, None
+
+    nickname_match = await vehicle_repo.find_by_nickname_containing(company_id, utterance)
+    if nickname_match:
+        return nickname_match, None
+
+    if allow_last4_match:
+        last4 = _extract_bare_last4(utterance)
+        if last4:
+            matches = await vehicle_repo.find_by_plate_last4(company_id, last4)
+            if len(matches) == 1:
+                return matches[0], None
+            if len(matches) > 1:
+                return None, {"reason": "last4_collision", "candidates": matches}
+
+    return None, None
 
 
 async def _resolve_driver_ref(
@@ -81,6 +151,7 @@ async def extract_entities(
     db: AsyncIOMotorDatabase,
     active_entities: dict | None = None,
     now: datetime | None = None,
+    resolve_vehicle_by_last4: bool = False,
 ) -> ExtractionResult:
     now = now or datetime.now(timezone.utc)
     spec = INTENT_SPECS.get(intent)
@@ -94,13 +165,30 @@ async def extract_entities(
     wanted = set(spec.required) | set(spec.optional) | set(spec.required_one_of)
 
     if "vehicle_ref" in wanted:
-        vehicle = await _resolve_vehicle_ref(utterance, company_id, vehicle_repo)
-        if vehicle is None and coreference.contains_pronoun_reference(utterance):
+        vehicle, ambiguous_info = await _resolve_vehicle_ref(
+            utterance, company_id, vehicle_repo, allow_last4_match=resolve_vehicle_by_last4
+        )
+        if vehicle is not None:
+            result.entities["vehicle_id"] = vehicle["_id"]
+        elif ambiguous_info is not None:
+            result.ambiguous["vehicle_ref"] = ambiguous_info
+        elif coreference.contains_pronoun_reference(utterance):
             active_id = coreference.resolve_active_entity("vehicle", active_entities)
             if active_id:
                 result.entities["vehicle_id"] = active_id
-        elif vehicle is not None:
-            result.entities["vehicle_id"] = vehicle["_id"]
+            # else: a pronoun IS present but nothing active resolves it — stays unresolved, same
+            # as before this feature. There's supposed to be one specific referent in play here
+            # ("its speed"), so silently broadening that into "list every vehicle" would be a
+            # different, unrequested behavior change, not a fix.
+        elif "vehicle_ref" in spec.required:
+            # Required, and nothing in the utterance identifies a vehicle at all (e.g. "where is
+            # my vehicle") — ask which one instead of a bare generic "which vehicle?" if there's
+            # more than one to choose from. Scoped to `required` specifically, not `optional` or
+            # `required_one_of`: an optional vehicle_ref with nothing mentioned legitimately
+            # means "answer for the whole fleet", not "ask which vehicle" (e.g. GET_TRIP_SUMMARY).
+            company_vehicles = await vehicle_repo.list_by_company(company_id)
+            if len(company_vehicles) > 1:
+                result.ambiguous["vehicle_ref"] = {"reason": "unspecified", "candidates": company_vehicles}
 
     if "driver_ref" in wanted:
         driver, candidates = await _resolve_driver_ref(utterance, company_id, driver_repo)

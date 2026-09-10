@@ -1,5 +1,10 @@
-"""Chat message repository — backs POST /chat's transcript persistence and
-GET /chat/{session_id}/history."""
+"""Chat message repository — `chat_messages` (renamed from `messages` in the source DBML,
+see schema_definitions.py). Shape changed to match the new schema exactly: session_id-scoped
+only (no company_id — chat_messages has no tenant field of its own in the DBML, so any
+org/product-scoped query has to join through chat_sessions), and it now carries
+model_provider/model_name/token counts/latency_ms/status per message instead of
+intent/tool_called. The old llm_usage collection's per-call-type usage tracking has no home
+here — see schema_definitions.py's module docstring and the standalone gap report."""
 
 from datetime import datetime
 
@@ -13,29 +18,37 @@ class ChatMessageRepository:
 
     async def insert(
         self,
-        company_id: ObjectId,
         session_id: ObjectId,
         role: str,
         content: str,
         now: datetime,
-        intent: str | None = None,
-        tool_called: str | None = None,
+        model_provider: str | None = None,
+        model_name: str | None = None,
+        prompt_tokens: int | None = None,
+        output_tokens: int | None = None,
+        total_tokens: int | None = None,
+        latency_ms: int | None = None,
+        status: str | None = None,
     ) -> None:
         doc = {
             "session_id": session_id,
-            "company_id": company_id,
             "role": role,
             "content": content,
             "created_at": now,
         }
-        if intent is not None:
-            doc["intent"] = intent
-        if tool_called is not None:
-            doc["tool_called"] = tool_called
+        for key, value in (
+            ("model_provider", model_provider),
+            ("model_name", model_name),
+            ("prompt_tokens", prompt_tokens),
+            ("output_tokens", output_tokens),
+            ("total_tokens", total_tokens),
+            ("latency_ms", latency_ms),
+            ("status", status),
+        ):
+            if value is not None:
+                doc[key] = value
         await self._db.chat_messages.insert_one(doc)
 
-    async def list_for_session(self, company_id: ObjectId, session_id: ObjectId, limit: int = 100) -> list[dict]:
-        cursor = self._db.chat_messages.find({"company_id": company_id, "session_id": session_id}).sort(
-            "created_at", 1
-        ).limit(limit)
+    async def list_for_session(self, session_id: ObjectId, limit: int = 100) -> list[dict]:
+        cursor = self._db.chat_messages.find({"session_id": session_id}).sort("created_at", 1).limit(limit)
         return await cursor.to_list(length=limit)
